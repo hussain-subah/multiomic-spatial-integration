@@ -110,6 +110,10 @@ Model:
 ```r
 rel_abundance ~ group2 + (1 | Scan_ID)
 ```
+where : 
+```r
+group2 = c("Control_AmyloidFree", "AD_Amyloid")
+```
 Contrast:
 ```r
 AD_Amyloid - Control_AmyloidFree
