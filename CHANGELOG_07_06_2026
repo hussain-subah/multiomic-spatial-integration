@@ -1,7 +1,6 @@
 # Session changes — 2026-07-06
 
-Summary of all code changes made this session. It grew well beyond the original two items into a set of analyses and validations built on the GeoMx WTA / SpaceJam pipeline — see the numbered sections below (spatial stats, pseudobulk validation, pathway linkage, marker/robustness checks, deconvolution comparison, figures, GWAS functional attribution, eQTL validation) plus a review pass that fixed concrete bugs and documented the design limitations.
----
+Summary of all code changes made this session. 
 
 ## 1. Spatial statistics: 4 separate contrast models (kept), plus region heterogeneity and cell-type co-occurrence
 
