@@ -9,6 +9,11 @@
 #' - Weighted overall AD effect: pathology-weighted AD vs Control
 #' - Max pathology effect: AD Amyloid vs Control AmyloidFree
 #'
+#' A separate analysis (`run_region_heterogeneity`) pools across regions to
+#' formally test whether these effects differ between vascular compartments
+#' (Arteries/Capillaries) and Parenchyma, using `region` as a coarse spatial
+#' axis in the absence of true spatial coordinates.
+#'
 #' @keywords internal
 NULL
 
@@ -88,9 +93,13 @@ prepare_spatial_proportion_data <- function(df,
 
 #' Run beta mixed model safely for one subset
 #'
+#' @param dispformula Dispersion sub-model formula, passed through to
+#'   `glmmTMB::glmmTMB()`. Defaults to constant dispersion.
+#'
 #' @keywords internal
 .run_beta_model <- function(tmp,
                             formula,
+                            dispformula = ~1,
                             min_rows = 5,
                             min_scans = 2) {
   if (nrow(tmp) < min_rows) return(NULL)
@@ -100,7 +109,8 @@ prepare_spatial_proportion_data <- function(df,
     glmmTMB::glmmTMB(
       formula,
       data = tmp,
-      family = glmmTMB::beta_family(link = "logit")
+      family = glmmTMB::beta_family(link = "logit"),
+      dispformula = dispformula
     ),
     silent = TRUE
   )
@@ -108,6 +118,32 @@ prepare_spatial_proportion_data <- function(df,
   if (inherits(fit, "try-error")) return(NULL)
 
   return(fit)
+}
+
+
+#' Build the 3-level disease/pathology group factor
+#'
+#' Collapses disease_status x pathology into the three observed cells
+#' (Control_AmyloidFree, AD_AmyloidFree, AD_Amyloid); the Control_Amyloid
+#' cell does not exist in this design and rows without a defined group are
+#' dropped.
+#'
+#' @keywords internal
+.add_group_factor <- function(df) {
+  df |>
+    dplyr::mutate(
+      group = dplyr::case_when(
+        .data$disease_status == "Control" ~ "Control_AmyloidFree",
+        .data$disease_status == "AD-CAA" & .data$pathology == "AmyloidFree" ~ "AD_AmyloidFree",
+        .data$disease_status == "AD-CAA" & .data$pathology == "Amyloid" ~ "AD_Amyloid",
+        TRUE ~ NA_character_
+      ),
+      group = factor(
+        .data$group,
+        levels = c("Control_AmyloidFree", "AD_AmyloidFree", "AD_Amyloid")
+      )
+    ) |>
+    dplyr::filter(!is.na(.data$group))
 }
 
 
@@ -283,20 +319,7 @@ run_disease_effect <- function(df,
 #' @export
 run_weighted_overall_effect <- function(df,
                                         abundance_col = "rel_abundance") {
-  overall_dat <- df |>
-    dplyr::mutate(
-      group = dplyr::case_when(
-        .data$disease_status == "Control" ~ "Control_AmyloidFree",
-        .data$disease_status == "AD-CAA" & .data$pathology == "AmyloidFree" ~ "AD_AmyloidFree",
-        .data$disease_status == "AD-CAA" & .data$pathology == "Amyloid" ~ "AD_Amyloid",
-        TRUE ~ NA_character_
-      ),
-      group = factor(
-        .data$group,
-        levels = c("Control_AmyloidFree", "AD_AmyloidFree", "AD_Amyloid")
-      )
-    ) |>
-    dplyr::filter(!is.na(.data$group))
+  overall_dat <- .add_group_factor(df)
 
   mean_results <- list()
   contrast_results <- list()
@@ -517,6 +540,127 @@ run_max_pathology_effect <- function(df,
     means = means_df,
     contrasts = contrast_df,
     fit_status = fit_status_df
+  )
+}
+
+
+# ============================================================
+# Region heterogeneity test
+# ============================================================
+
+#' Test whether disease/pathology effects differ by region
+#'
+#' `region` (Arteries, Capillaries, Parenchyma) is the only spatial
+#' information available in this dataset (no ROI coordinates are recorded
+#' by the GeoMx platform used here), and it is biologically meaningful for
+#' CAA: vascular vs. perivascular vs. parenchymal amyloid pathology. Every
+#' other function in this file loops *within* a region; this one pools
+#' across regions per cell-type to formally test whether the group effect
+#' depends on region, via `rel_abundance ~ group * region + (1 | Scan_ID)`
+#' and `emmeans::joint_tests()` on the `group:region` term. For cell-types
+#' with data in every group x region cell, post-hoc region-pairwise
+#' differences of the Disease_effect and Amyloid_effect contrasts (i.e.
+#' "does this effect differ between Arteries and Parenchyma") are also
+#' computed.
+#'
+#' @param df Cleaned dataframe.
+#' @param abundance_col Relative abundance column.
+#' @param min_cell_n Minimum rows required in every observed group x region
+#'   cell for a cell-type to be modeled.
+#'
+#' @return List with interaction_tests and posthoc contrasts.
+#' @export
+run_region_heterogeneity <- function(df,
+                                     abundance_col = "rel_abundance",
+                                     min_cell_n = 3) {
+  overall_dat <- .add_group_factor(df)
+
+  interaction_results <- list()
+  posthoc_results <- list()
+
+  for (ct in levels(overall_dat$celltype)) {
+
+    tmp <- overall_dat |>
+      dplyr::filter(.data$celltype == ct) |>
+      dplyr::filter(!is.na(.data[[abundance_col]]), is.finite(.data[[abundance_col]])) |>
+      droplevels()
+
+    if (dplyr::n_distinct(tmp$group) < 2) next
+    if (dplyr::n_distinct(tmp$region) < 2) next
+    if (dplyr::n_distinct(tmp$Scan_ID) < 2) next
+
+    cell_counts <- tmp |>
+      dplyr::count(.data$group, .data$region, .drop = FALSE)
+
+    if (any(cell_counts$n < min_cell_n)) next
+
+    fit <- .run_beta_model(
+      tmp = tmp,
+      formula = stats::as.formula(
+        paste0(abundance_col, " ~ group * region + (1 | Scan_ID)")
+      ),
+      dispformula = ~1
+    )
+
+    if (is.null(fit)) next
+
+    jt <- try(emmeans::joint_tests(fit), silent = TRUE)
+
+    if (inherits(jt, "try-error")) next
+
+    jt_df <- as.data.frame(jt)
+    interaction_row <- jt_df[jt_df[["model term"]] == "group:region", ]
+
+    if (nrow(interaction_row) == 0) next
+
+    interaction_results[[ct]] <- interaction_row |>
+      dplyr::mutate(celltype = ct)
+
+    emm_group_by_region <- emmeans::emmeans(fit, ~ group | region)
+
+    simple_effects <- try(
+      emmeans::contrast(
+        emm_group_by_region,
+        method = list(
+          Disease_effect = c(-1, 1, 0),
+          Amyloid_effect = c(0, -1, 1)
+        )
+      ),
+      silent = TRUE
+    )
+
+    if (inherits(simple_effects, "try-error")) next
+
+    region_diff <- try(
+      emmeans::contrast(simple_effects, method = "pairwise", by = "contrast"),
+      silent = TRUE
+    )
+
+    if (!inherits(region_diff, "try-error")) {
+      posthoc_results[[ct]] <- as.data.frame(summary(region_diff, infer = TRUE)) |>
+        dplyr::mutate(celltype = ct)
+    }
+  }
+
+  interaction_df <- dplyr::bind_rows(interaction_results)
+
+  if (nrow(interaction_df) > 0) {
+    interaction_df <- interaction_df |>
+      dplyr::mutate(p_adj = stats::p.adjust(.data$p.value, method = "BH"))
+  }
+
+  posthoc_df <- dplyr::bind_rows(posthoc_results)
+
+  if (nrow(posthoc_df) > 0) {
+    posthoc_df <- posthoc_df |>
+      dplyr::group_by(.data$contrast) |>
+      dplyr::mutate(p_adj = stats::p.adjust(.data$p.value, method = "BH")) |>
+      dplyr::ungroup()
+  }
+
+  list(
+    interaction_tests = interaction_df,
+    posthoc = posthoc_df
   )
 }
 

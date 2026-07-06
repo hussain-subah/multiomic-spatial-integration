@@ -1,10 +1,13 @@
 # ============================================================
 # Spatial statistical modeling (beta mixed-effects)
-# Multi-contrast framework:
+# Multi-contrast framework (4 separately-fit models):
 # - Amyloid effect
 # - Disease effect
 # - Overall effect (weighted)
 # - Max pathology comparison
+# Plus:
+# - Region (vascular-compartment) heterogeneity test
+# - CLR-transformed cell-type co-occurrence
 # ============================================================
 
 library(glmmTMB)
@@ -14,6 +17,7 @@ library(tidyr)
 library(readr)
 
 source("R/contrast_utils.R")
+source("R/cooccurrence_utils.R")
 source("R/plotting_utils.R")
 
 # Inputs / outputs
@@ -91,6 +95,43 @@ write.csv(
 write.csv(
   overall_res$weights,
   file = file.path(output_dir, "overall_effect_region_weights.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# Region heterogeneity test
+# ============================================================
+
+region_het_res <- run_region_heterogeneity(
+  df = df,
+  abundance_col = "rel_abundance"
+)
+
+write.csv(
+  region_het_res$interaction_tests,
+  file = file.path(output_dir, "region_heterogeneity_interaction_tests.csv"),
+  row.names = FALSE
+)
+
+write.csv(
+  region_het_res$posthoc,
+  file = file.path(output_dir, "region_heterogeneity_posthoc.csv"),
+  row.names = FALSE
+)
+
+# ============================================================
+# Cell-type co-occurrence (CLR-transformed, stratified by region)
+# ============================================================
+
+cooccurrence_res <- run_celltype_cooccurrence(
+  df = df,
+  abundance_col = "rel_abundance",
+  stratify_by = "region"
+)
+
+write.csv(
+  cooccurrence_res,
+  file = file.path(output_dir, "celltype_cooccurrence_by_region.csv"),
   row.names = FALSE
 )
 

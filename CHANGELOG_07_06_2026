@@ -1,0 +1,152 @@
+# Session changes — 2026-07-06
+
+Summary of all code changes made this session. 
+
+## 1. Spatial statistics: 4 separate contrast models (kept), plus region heterogeneity and cell-type co-occurrence
+
+### Why
+The original framework fits four separate beta mixed-effects models per region x cell-type (amyloid effect, disease effect, weighted overall effect, max pathology effect). 
+
+Two new, independent analyses (region heterogeneity, cell-type co-occurrence) were added.
+
+### Changes (current state)
+- **`R/contrast_utils.R`**: kept `run_amyloid_effect()`, `run_disease_effect()`, `run_weighted_overall_effect()`, `run_max_pathology_effect()` exactly as originally implemented (each fits its own model on its own data subset). Added `run_region_heterogeneity()`: pools across regions per cell-type, fits `rel_abundance ~ group * region + (1 | Scan_ID)`, and uses `emmeans::joint_tests()` to formally test whether the disease/amyloid effect differs between vascular compartments (Arteries/Capillaries/Parenchyma) — the only spatial axis available on this GeoMx platform (no ROI coordinates exist in the pipeline). Also computes post-hoc region-pairwise differences of the Disease/Amyloid effects for cell types with a significant interaction. Retains the `.add_group_factor()` helper (used by `run_weighted_overall_effect()` and `run_region_heterogeneity()`) and the `dispformula` parameter on `.run_beta_model()` (unused by the four original functions, default `~1` preserves their original behavior exactly).
+- **`R/cooccurrence_utils.R`** (new)
+  - `compute_clr()`: row-wise centered-log-ratio transform, correcting the compositional (sum-to-1) bias that would otherwise make naive Pearson correlation between cell-type proportions spuriously negative.
+  - `run_celltype_cooccurrence()`: pivots to ROI x cell-type, CLR-transforms, and computes pairwise correlations stratified by `region` (composition differs structurally by vascular compartment, so pooling would mostly reflect "which region" rather than genuine co-occurrence).
+- **`scripts/run_spatial_stats.R`**: calls the four separate contrast functions (as originally) plus `run_region_heterogeneity()` and `run_celltype_cooccurrence()`; output file names unchanged, plus new outputs `region_heterogeneity_interaction_tests.csv`, `region_heterogeneity_posthoc.csv`, `celltype_cooccurrence_by_region.csv`.
+- **`docs/statistical_modeling.md`**: "Multi-Contrast Framework" section restored to describe the four separate models; region heterogeneity and co-occurrence sections retained.
+
+### consolidated single-model approach
+
+The four functions above were replaced with a single `run_group_contrasts()` that fit one pooled cell-means model per region x cell-type (`rel_abundance ~ group + (1 | Scan_ID)` over the 3-level `group` factor, with group-varying dispersion) and derived all four contrasts — including a `Max_pathology_effect` not available in the original design — as linear combinations of that one fit. This was reverted at the user's request, but the trade-off is worth recording in case it's revisited:
+
+**Advantages the consolidated approach offered:**
+- **Internal consistency.** `run_amyloid_effect()`/`run_disease_effect()` each fit a model on a data *subset* (AD-CAA only, or AmyloidFree-only ROIs), while `run_weighted_overall_effect()` independently re-derives overlapping Disease/Amyloid contrasts from a separately pooled model. These can produce two different effect-size estimates for what is conceptually "the same" comparison, depending on which output CSV is read — the consolidated model has exactly one estimate per contrast, always.
+- **More statistical power per contrast.** Because every contrast was a linear combination of one model fit on all three groups, each contrast used the full available sample size (and a shared dispersion/random-effect estimate) rather than discarding whichever group(s) weren't directly being compared.
+- **A "for free" fourth contrast.** `Max_pathology_effect` (`AD_Amyloid` vs `Control_AmyloidFree`) is algebraically `Disease_effect + Amyloid_effect`. The original `run_max_pathology_effect()` re-fits a *separate* two-group model just for this comparison, discarding the `AD_AmyloidFree` ROIs entirely for that fit. The consolidated model got this contrast as a zero-cost linear combination of data it was already using.
+
+**Why keep 4 separate models anyway:** each model is fit on exactly the subset directly relevant to its own comparison (e.g. `run_disease_effect()` only ever sees AmyloidFree ROIs), which is simpler to reason about per-contrast and matches the original, already-validated modeling choices rather than introducing a new pooled-dispersion assumption across all three groups at once.
+
+### Verification status
+The script was reviewed manually rather than executed. Recommend running `scripts/run_spatial_stats.R` on real data before trusting the output.
+
+---
+
+## 2. Pseudobulk validation of the SpaceJam/Cell2Location deconvolution model
+
+### Why
+There was no way to check whether the custom Pyro deconvolution model (`models/LocationModelWTAMultiExperimentHierarchicalGeneLevel_Modified.py`) actually recovers known cell-type composition. This adds a pseudobulk validation: build synthetic ROIs with known ground-truth composition from held-out snRNA-seq reference cells, run them through the real model, and compare inferred vs. true proportions.
+
+### Design
+Each synthetic ROI is built by: (1) drawing a ground-truth composition from a Dirichlet distribution, (2) sampling cells from a **held-out** split of the reference (never the cells used to derive the signature matrix, so recovery isn't circular) and summing their counts, (3) borrowing a real ROI's negative-probe counts, total depth, and batch identity to give the synthetic ROI realistic technical noise, (4) multinomially resampling to the donor's depth.
+
+### Changes
+- **`python/pseudobulk_utils.py`** (new): `split_reference_cells()` (stratified train/holdout split), `sample_dirichlet_compositions()`, `build_synthetic_mixture()`, `generate_synthetic_dataset()`.
+- **`python/pseudobulk_validation_utils.py`** (new): `evaluate_recovery()` (per-cell-type Pearson/Spearman/RMSE/MAE), `plot_recovery_scatter()`, `plot_recovery_bias_by_abundance()`.
+- **`notebooks/06_pseudobulk_validation.py`** (new): end-to-end orchestration per condition (AD+CAA, Control) — reference split, signature re-derivation from train cells only, gene alignment, synthetic dataset generation, model training, evaluation, and output to `results/pseudobulk_validation/<condition>/`.
+
+### Bug caught during review (fixed before considering this done)
+`generate_synthetic_dataset()` initially derived its cell-type list from cells present in the **holdout** split, but the trained signature matrix (and thus the model's output columns) spans cell types from the **train** split. If a small cell type was small enough to be kept entirely in train (per `split_reference_cells`'s `min_holdout_cells` logic), the two lists would have different lengths and crash `extract_posterior_abundance()`. Fixed by requiring the full signature-derived cell-type list to be passed in explicitly.
+
+---
+
+## 3. Pathway analysis linked to cell-type proportions
+
+### Why
+Cell-type proportions are compositional summaries (fractions per ROI), not gene expression, so standard pathway/GSEA tools can't run on them directly.
+
+The repo already had minimal pathway-adjacent scaffolding — `R/enrichment_utils.R` (`extract_top_genes()`, `format_gene_list()`) and `scripts/run_pathway_sanity_checks.R` — but that pipeline characterizes what a cell type *is* (its marker genes, exported as a flat gene list for manual/external enrichment) rather than what covaries with a cell type's *abundance shifts*, and doesn't run enrichment itself.
+
+The actual proportion-driven analysis built here: for each cell type, correlate its per-ROI relative abundance against per-ROI gene expression, rank genes by that association, and run rank-based gene set enrichment (fgsea) on the ranked list — identifying pathways whose expression covaries with a cell type's abundance shifts, optionally within a stratum (e.g. only Amyloid-positive ROIs) rather than pooled across all conditions.
+
+### Design
+Per-ROI gene expression previously only existed Python-side (`adata.layers["counts"]` in `data/CAA-AD_AnnData.h5ad`). Python export dumps the already-clean counts to a plain CSV that R reads directly — no R-side GeoMx ETL, no cross-language runtime dependency. This also resolves a join-key ambiguity: the export uses `adata.obs_names` as its row index, which is exactly what `python/abundance_extraction_utils.py:make_abundance_dataframe()` resets into the `ROI_ID` column of the existing cell-proportions table, so the two join correctly without guessing between several similarly-named ROI columns seen in the real data (`ROI`, `ROI_ID`, etc.).
+
+### Changes
+- **`python/geomx_anndata_utils.py`**: added `export_expression_csv(adata, output_file, counts_layer="counts")` — writes an ROI x gene CSV of raw counts.
+- **`notebooks/01_wta_to_anndata.py`**: calls `export_expression_csv()` right after the AnnData is built, so the export happens automatically as part of the existing ETL step.
+- **`R/pathway_proportion_utils.R`** (new): `load_roi_expression()`, `normalize_expression_cpm()` (per-ROI log2-CPM, so correlation isn't confounded by sequencing depth), `rank_genes_by_celltype_association()` (vectorized Spearman correlation of every gene against a cell type's proportion in one `stats::cor()` call, not a per-gene loop; p-values via the standard t-approximation, BH-adjusted; errors loudly with a diagnostic if the ROI join comes back too small), `run_pathway_enrichment()` (wraps `fgsea::fgsea()`, returns `NULL` with a message if no GMT file is configured yet).
+- **`scripts/run_pathway_proportion_link.R`** (new): orchestrates the above per cell type (and optionally per stratum, e.g. `region`/`pathology`), reuses `R/enrichment_utils.R::extract_top_genes()`/`format_gene_list()` for a plain significant-gene-list export, and writes `results/pathway_proportion_link/<stratum>/<celltype>/{ranked_genes.csv, significant_gene_list.txt, pathway_enrichment.csv}`.
+
+### Verification status
+**Not executed.** No R or python scripts were executed, and no GMT gene-set file was wired in (consider downloading from Enrichr or MSigDB) (the `gmt_file` config in `scripts/run_pathway_proportion_link.R` is `NULL` by default — enrichment is skipped and only ranked gene lists are produced until a GMT path is supplied). Run on one cell type first and check the ROI-join diagnostic before running the full loop.
+
+---
+
+## 4. Marker-gene concordance check and contrast-model robustness check
+
+### Why
+Two more validation gaps identified:
+- The pseudobulk validation (section 2) only checks recovery of a *synthetic* composition. There was no real-data check of whether an inferred cell-type proportion actually makes biological sense — e.g. does inferred microglia abundance track microglia marker gene expression in the same real ROI?
+- The four contrast models (section 1) each rely on a `(1 | Scan_ID)` random intercept backed by as few as 3-4 distinct Scan_IDs. With that few clusters, a single scan can dominate an effect estimate, and nothing in the pipeline previously checked for that fragility.
+
+### Design
+**Marker-gene concordance**: for each cell type, take its significant marker genes from the existing Seurat cluster-marker table (`results/AD_CAA_cluster_markers.txt`), compute a per-ROI marker score (mean normalized expression across those markers), and correlate that score against the cell type's inferred proportion in the same ROI. A cell type whose proportion doesn't positively, significantly correlate with its own markers is a red flag independent of the synthetic pseudobulk result.
+
+**Contrast robustness**: generically wraps any of the four contrast functions — refit once per excluded `Scan_ID` (dropping it from the input data before calling the function, so each function's own internal subsetting logic is exercised unchanged), then compare each region x celltype x contrast estimate across all leave-one-out refits against the full-data estimate. Reports the range of leave-one-out estimates, the largest absolute swing, and whether the significance call (`p_adj < 0.05`) flips for any excluded scan — deliberately not collapsed into a single pass/fail threshold, so results can be sorted/filtered by how fragile they are rather than trusting an arbitrary cutoff.
+
+### Changes
+- **`R/marker_concordance_utils.R`** (new): `load_marker_genes()` (parses the Seurat marker table into a per-cell-type gene list, top-N configurable), `compute_marker_score()` (mean normalized expression across a gene set per ROI), `evaluate_marker_concordance()` (correlates marker score vs. inferred proportion per cell type, BH-adjusted). Reuses `load_roi_expression()`/`normalize_expression_cpm()` from `R/pathway_proportion_utils.R`.
+- **`scripts/run_marker_concordance_check.R`** (new): loads expression + proportions + marker table, runs the concordance check, writes `results/marker_concordance/marker_concordance.csv`, and prints/flags any cell type without positive, significant concordance.
+- **`R/robustness_utils.R`** (new): `run_leave_one_scan_out()` (generic — takes any contrast function as `model_fn`), `summarize_robustness()` (per region x celltype x contrast: estimate range, max absolute delta, significance-flip flag across leave-one-out refits).
+- **`scripts/run_contrast_robustness_check.R`** (new): runs leave-one-Scan-out for all four contrast functions from `R/contrast_utils.R`, writes `results/spatial_stats/robustness/<contrast_name>_robustness.csv`, and prints a count of flipped-significance results per contrast.
+
+### Verification status
+**Not executed.** The marker-concordance check additionally assumes `results/AD_CAA_cluster_markers.txt` has `gene`, `cluster`, and `p_val_adj` columns (standard `Seurat::FindAllMarkers()` output) — `load_marker_genes()` errors with the actual available columns if that assumption is wrong, rather than silently misreading the file. The robustness check refits each contrast function once per distinct `Scan_ID` in the dataset, so runtime scales with however many scans exist; run it once and check the per-contrast flip counts before trusting any single significant result from section 1.
+
+---
+
+## 5. Deconvolution method comparison (`deconvolution_comparison/`)
+
+### Why
+Compare the pipeline's Cell2location deconvolution against other spatial/bulk deconvolution tools, to see how method-dependent the inferred cell-type proportions are. A self-contained `deconvolution_comparison/` folder was added for this.
+
+### Feasibility decisions (driven by the data)
+This GeoMx data is ROI/segment-level (bulk-like) with **no per-spot spatial coordinates**, which determines what's runnable:
+- **Excluded — CARD**: its premise is leveraging (x,y) coordinates, which don't exist here; `CARDfree` would discard the point of it.
+- **Runs, but caveated — RCTD/spacexr**: built for spatial spots; runs with **dummy coordinates**, so it acts as a robust reference-based method with no spatial benefit.
+- **Runs, indirect — STdeconvolve**: reference-free LDA; produces topics, not cell types, so topics are matched to the reference signature post-hoc by correlation (approximate).
+- **Input-prep only — CIBERSORTx**: needs a license token + web/Docker submission; the pipeline can prepare its input files but not run it.
+- **Directly applicable — SpatialDecon, MuSiC, Bisque, DWLS, SPOTlight, BayesPrism**: bulk / reference-based methods suited to ROI-level data. **SpatialDecon** (NanoString's own DSP deconvolution) is the most platform-appropriate of these — it was built specifically for GeoMx and uses the negative-probe background.
+- **Baseline — Cell2location**: the existing result, used as the comparison target (no ground truth exists for real ROIs, so the comparison measures *agreement*, not accuracy).
+
+### Design
+All adapters produce the **same standard long output** (`method, ROI_ID, celltype, proportion`), so the comparison step is method-agnostic. Adapters are one-per-file for isolation, and each run only if its package is installed (missing package → skipped with a message, not a crash). The comparison consumes the existing Cell2location result plus every method's output and reports per-(method, celltype) correlation vs. baseline, a method × method correlation matrix, and per-method mean absolute proportion difference.
+
+### Changes (all new, under `deconvolution_comparison/`)
+- **`README.md`**: feasibility table, input files, output contract, run order.
+- **`R/common_utils.R`**: reference loader (from the exported MatrixMarket triple), mixture loader (reuses the `CAA-AD_expression_wide.csv` export from section 3), signature-matrix loader, gene alignment, standard-output writer, Cell2location baseline loader, and a `require_pkg()` skip helper.
+- **`R/adapter_music.R`, `adapter_bisque.R`, `adapter_dwls.R`, `adapter_spotlight.R`, `adapter_rctd.R`, `adapter_bayesprism.R`, `adapter_stdeconvolve.R`, `adapter_spatialdecon.R`**: one adapter each, converting the shared inputs into each tool's required container/API and returning an ROI × celltype proportion matrix. **SpatialDecon** (added after the initial set) is NanoString's GeoMx-native method: it Q3-normalizes the mixture and uses a per-ROI negative-probe background. That background is exported by `export_negprobe_background_from_targets()` in `python/geomx_anndata_utils.py` (called from `notebooks/01_wta_to_anndata.py`), which reads the negative control targets directly from the raw TargetCountMatrix — where the GeoMx negatives actually live, flagged by the feature annotations' `Negative` column — rather than from `adata.obsm["negProbes"]` (the AnnData build strips negatives out of the expression matrix). The adapter falls back to a proxy background with a warning if the file is absent.
+- **`R/comparison_utils.R`**: `concordance_vs_baseline()`, `cross_method_correlation()`, `mean_abs_diff_vs_baseline()`.
+- **`scripts/run_all_deconvolution.R`**: loads shared inputs once, runs every installed adapter, writes standard outputs.
+- **`scripts/prepare_cibersortx_inputs.R`**: writes CIBERSORTx-format signature + mixture TSVs and prints the manual submission steps.
+
+**Signature source for the signature-based tools (circularity fix).** DWLS, SpatialDecon, and CIBERSORTx take a genes × celltype signature matrix; the other five tools use the raw single-cell reference and can't take a pre-collapsed signature. Initially the signature-based tools used the cell2location NB-regression `*_inferred_signatures.csv` — but those are the same signatures the Cell2location/SpaceJam **baseline** is built on, so feeding them to DWLS/SpatialDecon shares a basis with the comparison target and inflates their apparent agreement. Fix: `build_mean_signature()` (in `deconvolution_comparison/R/common_utils.R`) aggregates the **raw snRNA-seq reference counts** (library-normalized, then per-cell-type mean) into an independent signature that never passes through cell2location. `run_all_deconvolution.R` now has a `signature_source` toggle defaulting to `"independent"` (writes `data/independent_reference_signature.csv`, which `prepare_cibersortx_inputs.R` also defaults to), with `"inferred"` available for the shared-basis version. 
+
+- **`scripts/run_deconvolution_comparison.R`**: loads all method outputs + baseline, writes concordance summaries, prints a per-method agreement headline.
+
+### Verification status
+**Not executed** Scripts should be treated as first-draft — expect to debug each on first run. The one-adapter-per-file layout and the install-check/skip logic mean you can bring them up one at a time. Reference cell-type and sample column names (`New_Idents`, `orig.ident`) in `run_all_deconvolution.R`'s config may need adjusting to match the actual exported metadata.
+
+---
+
+## 6. Figures for all new analyses (`R/viz_*.R`, `scripts/run_all_figures.R`)
+
+### Why
+This adds a ggplot2 figure layer covering all of them.
+
+### Design principles (from the dataviz guidance)
+- **Color assigned by the data's job**: sequential viridis for magnitude, a blue-grey-red **diverging** scale centered at 0 for signed quantities (log2 odds ratios, correlations), Okabe-Ito categorical (fixed order, ≤8) for methods/regions. All three are colorblind-safe by construction.
+- **The ~46 cell types are never color-encoded** (no palette survives that many categories) — they always sit on an axis (heatmaps, facets, sorted bars).
+- Shared theme + palette helpers live in `R/viz_theme.R`; every figure is saved as both PDF and PNG.
+
+### Changes
+- **`R/viz_theme.R`** (new): `okabe_ito_palette()`, `theme_analysis()`, `scale_fill_diverging()`/`scale_color_diverging()`, `scale_fill_magnitude()`, `save_figure()`.
+- **`R/viz_spatial_stats.R`** (new): contrast effect-size heatmap (region × cell-type × contrast, significance-starred), per-contrast forest plots with CIs, region-heterogeneity interaction bar, co-occurrence correlation heatmap, and an optional co-occurrence network (guarded by igraph/ggraph).
+- **`R/viz_pathway.R`** (new): per-cell-type GSEA dot plot (NES) and ranked-gene volcano.
+- **`R/viz_marker_concordance.R`** (new): sorted concordance bar with pass/flag coloring (QC view).
+- **`R/viz_robustness.R`** (new): leave-one-Scan-out caterpillar plot (full estimate vs. LOO range, significance-flip flagged).
+- **`R/viz_deconvolution.R`** (new): method × method correlation heatmap, per-method agreement distribution boxplot, method × cell-type mean-composition heatmap, per-cell-type agreement heatmap (which cell types drive each method's agreement), cross-method spread per cell type (flags method-sensitive vs. method-robust cell types), per-method distance-from-baseline bar, method clustering dendrogram, and per-cell-type method-vs-baseline scatter grid.
+- **`python/pseudobulk_validation_utils.py`**: added `plot_recovery_bar()` (sorted per-cell-type recovery metric), completing the pseudobulk plots on the Python side where the rest of that analysis lives.
+- **`scripts/run_all_figures.R`** (new): reads all R-side result CSVs and writes figures under `results/figures/<analysis>/`; each figure is guarded so a missing input skips it with a message rather than aborting.
