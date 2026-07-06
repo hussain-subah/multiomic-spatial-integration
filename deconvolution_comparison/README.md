@@ -85,8 +85,4 @@ results/deconvolution_comparison/<method>_proportions.csv
 
 ## Status
 
-**None of this has been executed.** No R interpreter or real data was available
-where it was written. Each adapter is written against the documented API of its
-package but is untested and version-sensitive; treat the first run of each as a
-debugging pass. Adapters are deliberately one-per-file so a failure in one is
-isolated from the others.
+**None of this has been executed.**
