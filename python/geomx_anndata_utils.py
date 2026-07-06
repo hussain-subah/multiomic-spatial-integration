@@ -161,6 +161,124 @@ def build_geomx_wta_anndata(
     return adata
 
 
+def export_expression_csv(adata, output_file, counts_layer="counts"):
+    """
+    Export a raw counts layer to a plain ROI x gene CSV.
+
+    Row labels are `adata.obs_names` -- the same values
+    `python.abundance_extraction_utils.make_abundance_dataframe()` resets
+    into the `ROI_ID` column of the cell-proportions table, so this export
+    joins correctly against that table by `ROI_ID` without needing any
+    GeoMx-specific ETL on the reading side (e.g. in R).
+
+    Parameters
+    ----------
+    adata : AnnData
+        GeoMx WTA AnnData (or a condition subset of it).
+    output_file : str
+        Destination CSV path.
+    counts_layer : str
+        Layer to export.
+
+    Returns
+    -------
+    pandas.DataFrame
+        The exported ROI x gene dataframe.
+    """
+    counts = adata.layers[counts_layer]
+    if not isinstance(counts, np.ndarray):
+        counts = counts.toarray()
+
+    expression_df = pd.DataFrame(
+        counts,
+        index=adata.obs_names,
+        columns=adata.var_names,
+    )
+
+    expression_df.to_csv(output_file)
+
+    return expression_df
+
+
+def export_negprobe_background_from_targets(
+    data_path,
+    target_counts_file,
+    feature_annotations_file,
+    output_file,
+    negative_col="Negative",
+    target_col="TargetName",
+):
+    """
+    Export a per-ROI negative-probe background from the target count matrix.
+
+    In this GeoMx WTA data the negative control targets (e.g. NegProbe-WTX)
+    live as rows of the raw TargetCountMatrix, flagged by the `Negative` column
+    of the feature annotations (the build in `build_geomx_wta_anndata` strips
+    them out of the AnnData's expression matrix). This reads them straight from
+    the raw target CSV and writes one row per ROI (index = ROI id) with a
+    `background` column = the mean of that ROI's negative-target counts.
+
+    This is the background input NanoString's SpatialDecon expects; it is
+    consumed by `deconvolution_comparison/R/adapter_spatialdecon.R` via
+    `load_roi_background`.
+
+    Parameters
+    ----------
+    data_path : str or Path
+        Directory containing the GeoMx CSV files.
+    target_counts_file : str
+        Target count matrix file (targets x ROI).
+    feature_annotations_file : str
+        Feature annotation CSV (must carry the `negative_col` flag and
+        `target_col` name).
+    output_file : str
+        Destination CSV path.
+    negative_col : str
+        Column flagging negative-control features.
+    target_col : str
+        Column naming the target (matched against the count matrix's index).
+
+    Returns
+    -------
+    pandas.DataFrame
+        The exported per-ROI background dataframe.
+    """
+    data_path = Path(data_path)
+
+    target_counts = pd.read_csv(data_path / target_counts_file, index_col=0)
+    feature_annotations = pd.read_csv(data_path / feature_annotations_file)
+
+    target_counts = remove_unnamed_columns(target_counts)
+    feature_annotations = remove_unnamed_columns(feature_annotations)
+
+    neg_flag = (
+        feature_annotations[negative_col]
+        .astype(str)
+        .str.upper()
+        .map({"TRUE": True, "FALSE": False})
+        .fillna(False)
+    )
+
+    negative_targets = feature_annotations.loc[neg_flag, target_col].astype(str).unique()
+    present_negatives = [t for t in negative_targets if t in target_counts.index]
+
+    if len(present_negatives) == 0:
+        raise ValueError(
+            "export_negprobe_background_from_targets: no negative targets "
+            f"(flagged by '{negative_col}') found in the target count matrix's "
+            "index. Check the negative_col / target_col names."
+        )
+
+    neg_counts = target_counts.loc[present_negatives]  # negatives x ROI
+
+    background = pd.DataFrame({"background": neg_counts.mean(axis=0)})
+    background.index.name = "ROI_ID"
+
+    background.to_csv(output_file)
+
+    return background
+
+
 def split_anndata_by_obs(adata, obs_col, values=None):
     """
     Split AnnData object by an obs column.
