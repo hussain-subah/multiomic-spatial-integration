@@ -676,33 +676,30 @@ run_region_heterogeneity <- function(df,
 #'
 #' @return Standardized contrast summary.
 #' @export
-format_contrast_summary <- function(contrast_df,
-                                    contrast_type) {
-  if (nrow(contrast_df) == 0) {
-    return(data.frame())
+format_contrast_summary <- function(contrast_df, contrast_type) {
+  
+  if ("odds.ratio" %in% colnames(contrast_df)) {
+    contrast_df$log2_OR <- log2(contrast_df$odds.ratio)
+  } else if ("estimate" %in% colnames(contrast_df)) {
+    contrast_df$log2_OR <- contrast_df$estimate / log(2)
+  } else {
+    contrast_df$log2_OR <- NA_real_
   }
-
-  out <- contrast_df |>
-    dplyr::mutate(
-      log2_OR = dplyr::case_when(
-        "odds.ratio" %in% colnames(contrast_df) ~ log2(.data$odds.ratio),
-        "estimate" %in% colnames(contrast_df) ~ .data$estimate / log(2),
-        TRUE ~ NA_real_
-      ),
-      contrast_type = contrast_type
-    ) |>
+  
+  contrast_df %>%
+    dplyr::mutate(type = contrast_type) %>%
     dplyr::select(
       dplyr::any_of(c(
         "celltype",
         "region",
         "contrast",
-        "contrast_type",
+        "type",
         "log2_OR",
+        "estimate",
+        "odds.ratio",
+        "SE",
         "p.value",
-        "p_adj",
-        "weight"
+        "p_adj"
       ))
     )
-
-  return(out)
 }

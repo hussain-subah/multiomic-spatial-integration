@@ -65,15 +65,25 @@ compute_clr <- function(prop_mat, eps = 1e-6) {
 run_celltype_cooccurrence <- function(df,
                                       abundance_col = "rel_abundance",
                                       stratify_by = "region",
-                                      min_n = 8) {
+                                      min_n = 3) {
   wide_dat <- df |>
     dplyr::select(dplyr::all_of(c("Scan_ID", stratify_by, "celltype", abundance_col))) |>
+    dplyr::filter(
+      !is.na(.data[[abundance_col]]),
+      !is.na(.data[[stratify_by]]),
+      !is.na(.data$Scan_ID),
+      !is.na(.data$celltype)
+    ) |>
+    dplyr::group_by(.data$Scan_ID, .data[[stratify_by]], .data$celltype) |>
+    dplyr::summarise(
+      abundance = mean(.data[[abundance_col]], na.rm = TRUE),
+      .groups = "drop"
+    ) |>
     tidyr::pivot_wider(
       id_cols = dplyr::all_of(c("Scan_ID", stratify_by)),
       names_from = "celltype",
-      values_from = dplyr::all_of(abundance_col)
-    ) |>
-    tidyr::drop_na()
+      values_from = abundance
+    )
 
   celltype_cols <- setdiff(colnames(wide_dat), c("Scan_ID", stratify_by))
 
@@ -88,11 +98,16 @@ run_celltype_cooccurrence <- function(df,
 
     sub <- wide_dat[wide_dat[[stratify_by]] == grp, celltype_cols, drop = FALSE]
 
+    sub <- sub[, colSums(!is.na(sub)) > 0, drop = FALSE]
+
     if (nrow(sub) < min_n) next
+    if (ncol(sub) < 2) next
+
+    sub[is.na(sub)] <- 0
 
     clr_mat <- compute_clr(sub)
 
-    pairs <- utils::combn(celltype_cols, 2, simplify = FALSE)
+    pairs <- utils::combn(colnames(clr_mat), 2, simplify = FALSE)
 
     pair_results <- lapply(pairs, function(pair) {
       ct1 <- pair[1]
@@ -120,7 +135,6 @@ run_celltype_cooccurrence <- function(df,
     if (nrow(pair_df) == 0) next
 
     pair_df[[stratify_by]] <- grp
-
     result_list[[as.character(grp)]] <- pair_df
   }
 
