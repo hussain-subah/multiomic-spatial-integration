@@ -14,8 +14,11 @@
 #  technical noise is realistic without an invented noise model.
 #- Inferred proportions are compared against the known synthetic ground
 #  truth.
-
+import os
+import torch
 import scanpy as sc
+import numpy as np
+import pandas as pd
 
 from python.regression_utils import (
     load_seurat_mtx_as_anndata,
@@ -26,27 +29,59 @@ from python.regression_utils import (
     train_regression_model,
     export_inferred_signatures,
 )
+
 from python.pseudobulk_utils import (
     split_reference_cells,
     generate_synthetic_dataset,
 )
+
 from python.spacejam_pyro_utils import (
     align_genes,
-    train_spacejam_model,
-    extract_posterior_abundance,
 )
+
 from python.pseudobulk_validation_utils import (
     evaluate_recovery,
     plot_recovery_scatter,
     plot_recovery_bias_by_abundance,
 )
 
-## Config -- adjust paths for your environment
+from models.LocationModelWTAMultiExperimentHierarchicalGeneLevel_Modified import (
+    LocationModelPyro,
+)
+
+# ============================================================
+# Config
+# ============================================================
 
 data_path = "data/"
 output_root = "results/pseudobulk_validation/"
+os.makedirs(output_root, exist_ok=True)
 
-## Load snRNA-seq reference (same inputs as notebooks/02_regression_signatures.py)
+condition_map = {
+    "AD+CAA": "AD-CAA",
+    "Control": "Control",
+}
+
+cell_number_prior = {
+    "cells_per_spot": 8.0,
+    "factors_per_spot": 7.0,
+    "combs_per_spot": 2.5,
+    "factors_per_combs": 3.0,
+    "cells_mean_var_ratio": 1.0,
+    "factors_mean_var_ratio": 1.0,
+    "combs_mean_var_ratio": 1.0,
+}
+
+# Smoke-test settings
+N_MIXTURES = 100
+N_CELLS_PER_MIXTURE = 200
+DIRICHLET_CONCENTRATION = 0.3
+N_STEPS = 9000
+LEARNING_RATE = 0.002
+
+# ============================================================
+# Load snRNA-seq reference
+# ============================================================
 
 adata_ref = load_seurat_mtx_as_anndata(
     counts_mtx=f"{data_path}/AD_CAA_counts.mtx",
@@ -65,43 +100,33 @@ adata_ref = standardize_regression_obs(
     experiment_value="Batch1",
 )
 
-adata_ref = round_counts_layer(adata_ref, counts_layer="counts", replace_x=True)
-adata_ref = minimal_filter_anndata(adata_ref, min_genes=1, min_cells=1, counts_layer="counts")
+adata_ref = round_counts_layer(
+    adata_ref,
+    counts_layer="counts",
+    replace_x=True,
+)
+
+adata_ref = minimal_filter_anndata(
+    adata_ref,
+    min_genes=1,
+    min_cells=1,
+    counts_layer="counts",
+)
 
 disable_lightning_mpi_detection()
 
-## Load real GeoMx WTA spatial AnnData (technical donor for synthetic ROIs only)
+# ============================================================
+# Load real GeoMx WTA AnnData
+# ============================================================
 
 adata_wta = sc.read_h5ad(f"{data_path}/CAA-AD_AnnData.h5ad")
 
 if "counts" not in adata_wta.layers:
     adata_wta.layers["counts"] = adata_wta.X.copy()
 
-## Reference FDX labels ("AD+CAA"/"Control") and spatial disease_status
-## labels ("AD-CAA"/"Control") use different strings for the same conditions.
-
-condition_map = {
-    "AD+CAA": "AD-CAA",
-    "Control": "Control",
-}
-
-# Matches the cell_number_prior actually used for real-data training in
-# notebooks/Examples/Cell2Location + SpaceJam.ipynb
-cell_number_prior = {
-    "cells_per_spot": 8.0,
-    "factors_per_spot": 7.0,
-    "combs_per_spot": 2.5,
-    "factors_per_combs": 3.0,
-    "cells_mean_var_ratio": 1.0,
-    "factors_mean_var_ratio": 1.0,
-    "combs_mean_var_ratio": 1.0,
-}
-
-N_MIXTURES = 100
-N_CELLS_PER_MIXTURE = 200
-DIRICHLET_CONCENTRATION = 0.3
-N_STEPS = 9000
-LEARNING_RATE = 0.002
+# ============================================================
+# Run validation
+# ============================================================
 
 results_by_condition = {}
 
@@ -110,8 +135,11 @@ for ref_condition, spatial_condition in condition_map.items():
     print(f"\n==== {ref_condition} ====")
 
     condition_output_dir = f"{output_root}/{ref_condition}/"
+    os.makedirs(condition_output_dir, exist_ok=True)
 
-    ## 1. Condition subset + held-out split of the reference
+    # ------------------------------------------------------------
+    # 1. Condition subset + train/holdout split
+    # ------------------------------------------------------------
 
     adata_ref_cond = adata_ref[adata_ref.obs["FDX"] == ref_condition].copy()
 
@@ -123,24 +151,30 @@ for ref_condition, spatial_condition in condition_map.items():
         seed=0,
     )
 
-    print(f"Train cells: {adata_train.n_obs}, holdout cells: {adata_holdout.n_obs}")
+    print(f"Train cells: {adata_train.n_obs}")
+    print(f"Holdout cells: {adata_holdout.n_obs}")
 
-    ## 2. Re-derive the signature matrix from train cells only (never holdout)
+    # ------------------------------------------------------------
+    # 2. Re-derive signatures from train cells only
+    # ------------------------------------------------------------
 
     model_regression = train_regression_model(
         adata_train,
         labels_key="celltype",
         batch_key="Experiment",
         layer="counts",
-        max_epochs=100,
+        max_epochs= 100, #100
         batch_size=1024,
         lr=0.01,
-        accelerator="gpu",
+        accelerator="gpu", #gpu
     )
 
     model_regression.export_posterior(
         adata_train,
-        sample_kwargs={"num_samples": 1000, "batch_size": 2500},
+        sample_kwargs={
+            "num_samples": 1000, #100
+            "batch_size": 2500, #500
+        },
     )
 
     signature_df, _ = export_inferred_signatures(
@@ -150,22 +184,34 @@ for ref_condition, spatial_condition in condition_map.items():
         output_folder=f"{condition_output_dir}/signature/",
     )
 
-    ## 3. Align genes: train-derived signature <-> holdout reference <-> real WTA
+    # ------------------------------------------------------------
+    # 3. Align genes across signature, holdout reference, and WTA
+    # ------------------------------------------------------------
 
-    signature_df, adata_holdout_aligned = align_genes(signature_df, adata_holdout)
+    signature_df, adata_holdout_aligned = align_genes(
+        signature_df,
+        adata_holdout,
+    )
 
-    adata_wta_cond = adata_wta[adata_wta.obs["disease_status"] == spatial_condition].copy()
-    signature_df, adata_wta_cond_aligned = align_genes(signature_df, adata_wta_cond)
+    adata_wta_cond = adata_wta[
+        adata_wta.obs["disease_status"] == spatial_condition
+    ].copy()
 
-    # adata_holdout_aligned may still hold genes dropped by the second
-    # align_genes() call above -- pin everything to the final shared set.
+    signature_df, adata_wta_cond_aligned = align_genes(
+        signature_df,
+        adata_wta_cond,
+    )
+
     shared_genes = adata_wta_cond_aligned.var_names
+
     adata_holdout_aligned = adata_holdout_aligned[:, shared_genes].copy()
     signature_df = signature_df.loc[shared_genes]
 
-    print(f"Shared genes (signature x holdout x real WTA): {len(shared_genes)}")
+    print(f"Shared genes: {len(shared_genes)}")
 
-    ## 4. Generate the synthetic pseudobulk dataset
+    # ------------------------------------------------------------
+    # 4. Generate synthetic pseudobulk ROIs
+    # ------------------------------------------------------------
 
     synthetic = generate_synthetic_dataset(
         adata_holdout_aligned,
@@ -178,45 +224,92 @@ for ref_condition, spatial_condition in condition_map.items():
         seed=0,
     )
 
-    ## 5. Train the deconvolution model on the synthetic ROIs
+    # ------------------------------------------------------------
+    # 5. Train SpaceJam / Cell2location model on synthetic ROIs
+    # ------------------------------------------------------------
 
-    cell_state_mat = signature_df.values.astype("float32")
+    inputs = {
+        "cell_state_mat": signature_df.values.astype("float32"),
+        "X_data": synthetic["X_data"].astype("float32"),
+        "Y_data": synthetic["Y_data"].astype("float32"),
+        "spot2sample_mat": synthetic["spot2sample_mat"].astype("float32"),
+        "cell_number_prior": cell_number_prior,
+    }
 
-    model, loss_hist = train_spacejam_model(
-        cell_state_mat,
-        synthetic["X_data"],
-        synthetic["Y_data"],
-        synthetic["spot2sample_mat"],
+    model = LocationModelPyro(**inputs)
+
+    model.fit(
         n_steps=N_STEPS,
-        lr=LEARNING_RATE,
-        cell_number_prior=cell_number_prior,
+        lr=LEARNING_RATE
     )
 
-    ## 6. Extract inferred proportions and compare to known ground truth
+    if not hasattr(model, "cell_types"):
+        model.cell_types = list(signature_df.columns)
 
-    synthetic_roi_ids = [f"synthetic_{i:04d}" for i in range(synthetic["X_data"].shape[0])]
+    # ------------------------------------------------------------
+    # 6. Extract inferred proportions
+    # ------------------------------------------------------------
 
-    inferred_df = extract_posterior_abundance(
-        celltype_labels=synthetic["celltypes"],
-        roi_names=synthetic_roi_ids,
-        normalize=True,
+
+    synthetic_roi_ids = [
+        f"synthetic_{i:04d}" for i in range(synthetic["X_data"].shape[0])
+    ]
+
+    posterior = model.posterior_predictive(num_samples=100)
+
+    spot_factors = posterior["spot_factors"]
+
+    # Convert torch tensor -> numpy
+    if hasattr(spot_factors, "detach"):
+        spot_factors = spot_factors.detach().cpu().numpy()
+
+    # Average across posterior samples
+    abundance = spot_factors.mean(axis=0)
+
+    # Convert to proportions
+    inferred_df = pd.DataFrame(
+        abundance,
+        index=synthetic_roi_ids,
+        columns=list(signature_df.columns),
     )
 
-    metrics_df = evaluate_recovery(synthetic["ground_truth_df"], inferred_df)
+    inferred_df = inferred_df.div(
+        inferred_df.sum(axis=1),
+        axis=0
+    )
+    # ------------------------------------------------------------
+    # 7. Evaluate recovery
+    # ------------------------------------------------------------
+
+    metrics_df = evaluate_recovery(
+        synthetic["ground_truth_df"],
+        inferred_df,
+    )
 
     ground_truth_out = synthetic["ground_truth_df"].copy()
     ground_truth_out.insert(0, "roi_id", synthetic_roi_ids)
     ground_truth_out.insert(1, "donor_roi_id", synthetic["donor_roi_ids"])
 
-    metrics_df.to_csv(f"{condition_output_dir}/recovery_metrics.csv", index=False)
-    ground_truth_out.to_csv(f"{condition_output_dir}/ground_truth_proportions.csv", index=False)
-    inferred_df.to_csv(f"{condition_output_dir}/inferred_proportions.csv")
+    metrics_df.to_csv(
+        f"{condition_output_dir}/recovery_metrics.csv",
+        index=False,
+    )
+
+    ground_truth_out.to_csv(
+        f"{condition_output_dir}/ground_truth_proportions.csv",
+        index=False,
+    )
+
+    inferred_df.to_csv(
+        f"{condition_output_dir}/inferred_proportions.csv"
+    )
 
     plot_recovery_scatter(
         synthetic["ground_truth_df"],
         inferred_df,
         save_file=f"{condition_output_dir}/recovery_scatter.pdf",
     )
+
     plot_recovery_bias_by_abundance(
         synthetic["ground_truth_df"],
         inferred_df,
