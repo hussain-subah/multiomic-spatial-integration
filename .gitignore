@@ -20,9 +20,12 @@ __pycache__/
 # ======================================================
 # Analysis outputs
 # ======================================================
-results/
-!results/.gitkeep
+# Large intermediate outputs
+results/pseudobulk_validation/
+results/cell_proportions/
 
+# Downloaded pathway databases
+resources/gmt/
 # ======================================================
 # Local data
 # ======================================================

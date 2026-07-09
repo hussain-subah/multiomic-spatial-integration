@@ -27,27 +27,24 @@ adata_wta = sc.read_h5ad("data/CAA-AD_AnnData.h5ad")
 adata_wta.obs.head()
 
 ## Load posterior means from trained spatial models
-
-ad_means = load_variational_means("models/ADCAA_variational_means.pt")
-ctrl_means = load_variational_means("models/CTRL_variational_means.pt")
-
 ## Extract spot factors
-
-
 #`spot_factors` represent inferred absolute cell-type abundance per ROI.
-
-ad_spot_abs = extract_spot_factors(ad_means)
-ctrl_spot_abs = extract_spot_factors(ctrl_means)
-
 ## Normalize to relative proportions
+spacejam_results = "/N/u/echimal/Quartz/Desktop/CLR_MRI/Human_GeoMx_Sep2025/SpaceJam_results"
 
-ad_spot_rel = normalize_spot_factors(ad_spot_abs)
-ctrl_spot_rel = normalize_spot_factors(ctrl_spot_abs)
+ad_spot_abs = torch.load(f"{spacejam_results}/ADCAA_spot_factors_abs.pt", map_location="cpu").detach().cpu().numpy()
+ad_spot_rel = torch.load(f"{spacejam_results}/ADCAA_spot_factors_rel.pt", map_location="cpu").detach().cpu().numpy()
+
+ctrl_spot_abs = torch.load(f"{spacejam_results}/CTRL_spot_factors_abs.pt", map_location="cpu").detach().cpu().numpy()
+ctrl_spot_rel = torch.load(f"{spacejam_results}/CTRL_spot_factors_rel.pt", map_location="cpu").detach().cpu().numpy()
 
 ## Add cell-type labels
 
 #These labels should match the regression-derived signature columns.
+signature_path = "/N/u/echimal/Quartz/Desktop/CLR_MRI/Human_GeoMx_Sep2025/Regression-model/AD+CAA_inferred_signatures.csv"
 
+signature_df = pd.read_csv(signature_path, index_col=0)
+celltype_labels = pd.DataFrame({"celltype": signature_df.columns})
 ## Build abundance data frames
 
 ad_obs = adata_wta.obs[adata_wta.obs["disease_status"] == "AD-CAA"].copy()

@@ -127,11 +127,22 @@ def make_abundance_dataframe(
     meta = obs.copy()
 
     if roi_id_col is None:
-        meta = meta.reset_index().rename(columns={"index": "ROI_ID"})
+        meta = meta.copy()
+
+        # AnnData obs index is the true ROI identifier.
+        # Avoid duplicate ROI_ID columns from GeoMx metadata.
+        if "ROI_ID" in meta.columns:
+            meta = meta.rename(columns={"ROI_ID": "GeoMx_ROI_ID"})
+
+        meta = meta.reset_index()
+        meta = meta.rename(columns={meta.columns[0]: "ROI_ID"})
+
     elif roi_id_col in meta.columns:
-        meta = meta.reset_index(drop=False)
+        meta = meta.copy()
+        meta["ROI_ID"] = meta[roi_id_col].astype(str)
+
     else:
-        raise ValueError(f"{roi_id_col} not found in obs.")
+       raise ValueError(f"{roi_id_col} not found in obs.")
 
     abundance_df = abundance_df.reset_index(drop=True)
 

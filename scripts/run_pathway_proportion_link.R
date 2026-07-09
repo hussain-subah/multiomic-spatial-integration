@@ -18,13 +18,14 @@ source("R/enrichment_utils.R")
 # Config -- adjust paths for your environment
 # ============================================================
 
-expression_csv <- "data/CAA-AD_expression_wide.csv"
-proportions_csv <- "results/cell_proportions/spatial_celltype_proportions_for_R.csv"
+expression_csv <- "results/geomx_exports/CAA-AD_expression_wide.csv"
+proportions_csv <- "results/cell_proportions/roi_celltype_abundance_long.csv"
+roi_id_col <- "ROI_ID"
 output_dir <- "results/pathway_proportion_link"
 
 # Set to a local GMT path (e.g. MSigDB Hallmark/KEGG/Reactome/GO) to enable
 # pathway enrichment; leave NULL to only produce ranked gene lists.
-gmt_file <- NULL
+gmt_file <- "resources/gmt/Reactome_2022.gmt" #KEGG_2021_Human.gmt # or #WikiPathway_2023_Human.gmt
 
 # NULL = all cell types found in proportions_csv; or a character vector to
 # restrict to specific cell types.
