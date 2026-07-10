@@ -40,32 +40,67 @@ load_marker_genes <- function(markers_file,
                               padj_cutoff = 0.05,
                               top_n = NULL,
                               logfc_col = "avg_log2FC") {
-  markers <- utils::read.table(markers_file, header = TRUE, stringsAsFactors = FALSE)
+
+  markers <- utils::read.table(
+    markers_file,
+    header = TRUE,
+    stringsAsFactors = FALSE
+  )
 
   required_cols <- c(gene_col, cluster_col, padj_col)
   missing_cols <- setdiff(required_cols, colnames(markers))
 
   if (length(missing_cols) > 0) {
     stop(
-      "load_marker_genes: missing column(s) ", paste(missing_cols, collapse = ", "),
-      " in ", markers_file, ". Available columns: ",
+      "load_marker_genes: missing column(s) ",
+      paste(missing_cols, collapse = ", "),
+      " in ", markers_file,
+      ". Available columns: ",
       paste(colnames(markers), collapse = ", "),
       call. = FALSE
     )
   }
 
-  markers <- markers[markers[[padj_col]] < padj_cutoff, ]
+  markers <- markers[
+    !is.na(markers[[padj_col]]) &
+      markers[[padj_col]] < padj_cutoff,
+  ]
 
-  if (!is.null(top_n) && logfc_col %in% colnames(markers)) {
-    markers <- markers[order(markers[[cluster_col]], -markers[[logfc_col]]), ]
-  } else {
-    markers <- markers[order(markers[[cluster_col]], markers[[padj_col]]), ]
+  if (logfc_col %in% colnames(markers)) {
+    markers <- markers[
+      !is.na(markers[[logfc_col]]) &
+        markers[[logfc_col]] > 0,
+    ]
   }
 
-  split_markers <- split(markers[[gene_col]], markers[[cluster_col]])
+  if (!is.null(top_n) && logfc_col %in% colnames(markers)) {
+    markers <- markers[
+      order(
+        markers[[cluster_col]],
+        -markers[[logfc_col]],
+        markers[[padj_col]]
+      ),
+    ]
+  } else {
+    markers <- markers[
+      order(
+        markers[[cluster_col]],
+        markers[[padj_col]]
+      ),
+    ]
+  }
+
+  split_markers <- split(
+    markers[[gene_col]],
+    markers[[cluster_col]]
+  )
 
   if (!is.null(top_n)) {
-    split_markers <- lapply(split_markers, utils::head, n = top_n)
+    split_markers <- lapply(
+      split_markers,
+      utils::head,
+      n = top_n
+    )
   }
 
   lapply(split_markers, unique)
@@ -84,26 +119,38 @@ load_marker_genes <- function(markers_file,
 #'
 #' @return Named numeric vector, one score per ROI.
 #' @export
-compute_marker_score <- function(expr_mat, genes) {
+compute_marker_score <- function(expr_mat, genes, min_markers = 3) {
   found_genes <- intersect(genes, colnames(expr_mat))
 
-  if (length(found_genes) == 0) {
+  if (length(found_genes) < min_markers) {
     stop(
-      "compute_marker_score: none of the requested marker genes were found ",
-      "in expr_mat's columns.",
+      "compute_marker_score: only ", length(found_genes),
+      " usable marker gene(s); need at least ", min_markers, ".",
       call. = FALSE
     )
   }
 
-  if (length(found_genes) < length(genes) / 2) {
-    warning(
-      "compute_marker_score: only ", length(found_genes), " of ", length(genes),
-      " marker genes were found in expr_mat.",
+  marker_mat <- as.matrix(expr_mat[, found_genes, drop = FALSE])
+
+  # Standardize each marker across ROIs.
+  marker_z <- scale(marker_mat)
+
+  # Remove genes with zero variance, which become NA after scaling.
+  keep <- colSums(is.finite(marker_z)) == nrow(marker_z)
+  marker_z <- marker_z[, keep, drop = FALSE]
+
+  if (ncol(marker_z) < min_markers) {
+    stop(
+      "compute_marker_score: fewer than ", min_markers,
+      " variable marker genes remained after scaling.",
       call. = FALSE
     )
   }
 
-  rowMeans(expr_mat[, found_genes, drop = FALSE])
+  stats::setNames(
+    rowMeans(marker_z),
+    rownames(expr_mat)
+  )
 }
 
 
@@ -134,7 +181,8 @@ evaluate_marker_concordance <- function(expr_mat,
                                         proportion_col = "rel_abundance",
                                         celltype_col = "celltype",
                                         method = "spearman",
-                                        min_shared_rois = 5) {
+                                        min_shared_rois = 5,
+                                        min_markers = 3) {
   if (!roi_id_col %in% colnames(proportions_df)) {
     stop(
       "evaluate_marker_concordance: roi_id_col '", roi_id_col,
@@ -157,19 +205,26 @@ evaluate_marker_concordance <- function(expr_mat,
   results <- lapply(celltypes, function(ct) {
     genes <- marker_genes_list[[ct]]
 
-    score <- try(compute_marker_score(expr_mat, genes), silent = TRUE)
+    score <- try(
+      compute_marker_score(
+        expr_mat,
+        genes,
+        min_markers = min_markers
+      ),
+      silent = TRUE
+   )
 
     if (inherits(score, "try-error")) {
-      return(data.frame(
-        celltype = ct,
-        n_markers_requested = length(genes),
-        n_markers_found = 0,
-        statistic = NA_real_,
-        p.value = NA_real_,
-        n = NA_integer_,
-        stringsAsFactors = FALSE
-      ))
-    }
+  return(data.frame(
+    celltype = ct,
+    n_markers_requested = length(genes),
+    n_markers_found = sum(genes %in% colnames(expr_mat)),
+    statistic = NA_real_,
+    p.value = NA_real_,
+    n = NA_integer_,
+    stringsAsFactors = FALSE
+  ))
+}
 
     dat_ct <- proportions_df[proportions_df[[celltype_col]] == ct, ]
     rownames(dat_ct) <- dat_ct[[roi_id_col]]
@@ -195,7 +250,20 @@ evaluate_marker_concordance <- function(expr_mat,
     score_sub <- score[shared_rois]
     proportion_sub <- dat_ct[shared_rois, proportion_col]
 
-    test <- stats::cor.test(score_sub, proportion_sub, method = method)
+    if (method == "spearman") {
+      test <- stats::cor.test(
+        score_sub,
+        proportion_sub,
+        method = "spearman",
+        exact = FALSE
+      )
+    } else {
+      test <- stats::cor.test(
+        score_sub,
+        proportion_sub,
+        method = method
+      )
+    }
 
     data.frame(
       celltype = ct,
