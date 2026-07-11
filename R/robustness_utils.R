@@ -76,40 +76,186 @@ run_leave_one_scan_out <- function(df,
 #'   any_sig_flip -- sorted by `max_abs_delta` descending (most fragile
 #'   results first).
 #' @export
-summarize_robustness <- function(full_contrasts,
-                                 loo_contrasts,
-                                 join_cols = c("region", "celltype", "contrast"),
-                                 sig_cutoff = 0.05) {
+.standardize_effect_column <- function(x) {
+
+  if ("estimate" %in% colnames(x)) {
+    x$effect_scale <- "estimate"
+    return(x)
+  }
+
+  if ("odds.ratio" %in% colnames(x)) {
+
+    invalid_or <- (
+      !is.na(x$odds.ratio) &
+        (!is.finite(x$odds.ratio) | x$odds.ratio <= 0)
+    )
+
+    if (any(invalid_or)) {
+      stop(
+        ".standardize_effect_column: odds.ratio contains ",
+        "non-positive or non-finite values.",
+        call. = FALSE
+      )
+    }
+
+    # Convert multiplicative odds ratios to an additive log-odds scale.
+    x$estimate <- log(x$odds.ratio)
+    x$effect_scale <- "log_odds_ratio"
+
+    return(x)
+  }
+
+  stop(
+    ".standardize_effect_column: could not find either 'estimate' ",
+    "or 'odds.ratio'. Available columns: ",
+    paste(colnames(x), collapse = ", "),
+    call. = FALSE
+  )
+}
+
+
+#' Summarize leave-one-Scan-out robustness
+#'
+#' For each region x celltype x contrast, reports how much the estimate
+#' moves and whether the significance call flips across all
+#' single-scan-excluded refits.
+#'
+#' @param full_contrasts Contrasts data frame from the complete-data fit.
+#' @param loo_contrasts Contrasts data frame from `run_leave_one_scan_out()`
+#'   (must include an `excluded_scan` column).
+#' @param join_cols Columns identifying a unique contrast row.
+#' @param sig_cutoff Adjusted p-value threshold defining "significant".
+#'
+#' @return Data frame: `join_cols`, full_estimate, full_p_adj,
+#'   min_loo_estimate, max_loo_estimate, max_abs_delta, n_loo,
+#'   any_sig_flip -- sorted by `max_abs_delta` descending.
+#' @export
+summarize_robustness <- function(
+    full_contrasts,
+    loo_contrasts,
+    join_cols = c("region", "celltype", "contrast"),
+    sig_cutoff = 0.05
+) {
+
   if (nrow(loo_contrasts) == 0) {
     return(data.frame())
   }
 
+  full_contrasts <- .standardize_effect_column(
+    full_contrasts
+  )
+
+  loo_contrasts <- .standardize_effect_column(
+    loo_contrasts
+  )
+
+  missing_full_cols <- setdiff(
+    c(join_cols, "estimate", "p_adj"),
+    colnames(full_contrasts)
+  )
+
+  if (length(missing_full_cols) > 0) {
+    stop(
+      "summarize_robustness: full_contrasts is missing column(s): ",
+      paste(missing_full_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
+  missing_loo_cols <- setdiff(
+    c(join_cols, "estimate", "p_adj", "excluded_scan"),
+    colnames(loo_contrasts)
+  )
+
+  if (length(missing_loo_cols) > 0) {
+    stop(
+      "summarize_robustness: loo_contrasts is missing column(s): ",
+      paste(missing_loo_cols, collapse = ", "),
+      call. = FALSE
+    )
+  }
+
   full_sub <- full_contrasts |>
-    dplyr::select(dplyr::all_of(c(join_cols, "estimate", "p_adj"))) |>
-    dplyr::rename(full_estimate = estimate, full_p_adj = p_adj)
+    dplyr::select(
+      dplyr::all_of(
+        c(join_cols, "estimate", "p_adj")
+      )
+    ) |>
+    dplyr::rename(
+      full_estimate = estimate,
+      full_p_adj = p_adj
+    )
 
   loo_sub <- loo_contrasts |>
-    dplyr::select(dplyr::all_of(c(join_cols, "estimate", "p_adj", "excluded_scan"))) |>
-    dplyr::rename(loo_estimate = estimate, loo_p_adj = p_adj)
+    dplyr::select(
+      dplyr::all_of(
+        c(
+          join_cols,
+          "estimate",
+          "p_adj",
+          "excluded_scan"
+        )
+      )
+    ) |>
+    dplyr::rename(
+      loo_estimate = estimate,
+      loo_p_adj = p_adj
+    )
 
-  joined <- dplyr::inner_join(loo_sub, full_sub, by = join_cols)
+  joined <- dplyr::inner_join(
+    loo_sub,
+    full_sub,
+    by = join_cols
+  )
 
   joined |>
     dplyr::mutate(
       sig_full = .data$full_p_adj < sig_cutoff,
       sig_loo = .data$loo_p_adj < sig_cutoff,
-      abs_delta = abs(.data$loo_estimate - .data$full_estimate)
+      abs_delta = abs(
+        .data$loo_estimate - .data$full_estimate
+      )
     ) |>
-    dplyr::group_by(dplyr::across(dplyr::all_of(join_cols))) |>
+    dplyr::group_by(
+      dplyr::across(
+        dplyr::all_of(join_cols)
+      )
+    ) |>
     dplyr::summarise(
-      full_estimate = dplyr::first(.data$full_estimate),
-      full_p_adj = dplyr::first(.data$full_p_adj),
-      min_loo_estimate = min(.data$loo_estimate, na.rm = TRUE),
-      max_loo_estimate = max(.data$loo_estimate, na.rm = TRUE),
-      max_abs_delta = max(.data$abs_delta, na.rm = TRUE),
+      full_estimate = dplyr::first(
+        .data$full_estimate
+      ),
+      full_p_adj = dplyr::first(
+        .data$full_p_adj
+      ),
+      min_loo_estimate = min(
+        .data$loo_estimate,
+        na.rm = TRUE
+      ),
+      max_loo_estimate = max(
+        .data$loo_estimate,
+        na.rm = TRUE
+      ),
+      max_abs_delta = max(
+        .data$abs_delta,
+        na.rm = TRUE
+      ),
       n_loo = dplyr::n(),
-      any_sig_flip = any(.data$sig_loo != dplyr::first(.data$sig_full)),
+
+      any_sig_flip = any(
+        .data$sig_loo !=
+          dplyr::first(.data$sig_full)
+      ),
+
+      any_direction_flip = any(
+        sign(.data$loo_estimate) !=
+          sign(dplyr::first(.data$full_estimate)),
+        na.rm = TRUE
+      ),
+
       .groups = "drop"
     ) |>
-    dplyr::arrange(dplyr::desc(.data$max_abs_delta))
+    dplyr::arrange(
+      dplyr::desc(.data$max_abs_delta)
+    )
 }

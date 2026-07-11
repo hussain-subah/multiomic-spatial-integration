@@ -20,7 +20,7 @@ source("R/enrichment_utils.R")
 
 expression_csv <- "results/geomx_exports/CAA-AD_expression_wide.csv"
 proportions_csv <- "results/cell_proportions/roi_celltype_abundance_long.csv"
-roi_id_col <- "ROI_ID"
+#roi_id_col <- "ROI_ID"
 output_dir <- "results/pathway_proportion_link"
 
 # Set to a local GMT path (e.g. MSigDB Hallmark/KEGG/Reactome/GO) to enable
