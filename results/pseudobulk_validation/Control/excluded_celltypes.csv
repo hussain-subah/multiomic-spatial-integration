@@ -1,0 +1,6 @@
+celltype,n_train_cells,n_holdout_cells,reason
+Fibroblast,3,0,no_holdout_cells
+Microglia5,10,0,no_holdout_cells
+Oligodendrocytes5,28,0,no_holdout_cells
+Oligodendrocytes8,13,0,no_holdout_cells
+VLMC2,29,0,no_holdout_cells

@@ -1,0 +1,7 @@
+celltype,n_train_cells,n_holdout_cells,reason
+Astrocytes2,2,0,no_holdout_cells
+ExNeuron10,24,0,no_holdout_cells
+Microglia2,1,0,no_holdout_cells
+Microglia5,18,0,no_holdout_cells
+OPC3,1,0,no_holdout_cells
+Oligodendrocytes7,1,0,no_holdout_cells
