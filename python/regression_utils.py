@@ -286,7 +286,10 @@ def save_regression_models(
 
     for condition, model in trained_models.items():
         model_dir = output_dir / f"{condition}{suffix}"
-        model.save(str(model_dir))
+        model.save(
+          str(model_dir),
+          overwrite=True
+)
 
 
 def load_and_export_regression_posterior(

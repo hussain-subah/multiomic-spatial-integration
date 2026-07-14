@@ -1,321 +1,349 @@
+# =============================================================================
 # 04 — Extract and Annotate Spatial Cell-Type Proportions
-
-#This notebook extracts posterior cell-type abundance estimates from trained SpaceJam/Pyro models and converts them into analysis-ready tables.
-
-#Outputs include:
-
-#- absolute cell-type abundance per ROI
-#- relative cell-type proportions per ROI
-#- long-format ROI × cell-type tables
-#- metadata-annotated abundance tables
+#
+# This notebook converts the validated SpaceJam outputs into analysis-ready
+# abundance tables.
+#
+# Inputs:
+#   results/spacejam/*.pt
+#   results/regression_model/*_inferred_signatures.csv
+#
+# Outputs:
+#   results/cell_proportions/
+# =============================================================================
 
 import scanpy as sc
 import pandas as pd
 import torch
 
 from python.abundance_extraction_utils import (
-    load_variational_means,
-    extract_spot_factors,
-    normalize_spot_factors,
     make_abundance_dataframe,
     make_long_abundance_table,
-    save_abundance_outputs
+    save_abundance_outputs,
 )
-## Load GeoMx AnnData metadata
+
+# =============================================================================
+# Load GeoMx metadata
+# =============================================================================
 
 adata_wta = sc.read_h5ad("data/CAA-AD_AnnData.h5ad")
-adata_wta.obs.head()
 
-## Load posterior means from trained spatial models
-## Extract spot factors
-#`spot_factors` represent inferred absolute cell-type abundance per ROI.
-## Normalize to relative proportions
-## Load SpaceJam posterior parameters and recover constrained abundances
+print(adata_wta)
+
+# =============================================================================
+# Load validated SpaceJam abundance tensors
+# =============================================================================
 
 spacejam_results = (
     "/N/u/echimal/Quartz/Desktop/CLR_MRI/"
-    "Human_GeoMx_Sep2025/SpaceJam_results"
+    "Human_GeoMx_Sep2025/"
+    "multiomic-spatial-integration/results/spacejam"
 )
 
-ad_param_store = torch.load(
-    f"{spacejam_results}/ADCAA_param_store.pt",
+ad_spot_abs_t = torch.load(
+    f"{spacejam_results}/ADCAA_spot_factors_abs.pt",
     map_location="cpu",
+    weights_only=True,
 )
 
-ctrl_param_store = torch.load(
-    f"{spacejam_results}/CTRL_param_store.pt",
+ad_spot_rel_t = torch.load(
+    f"{spacejam_results}/ADCAA_spot_factors_rel.pt",
     map_location="cpu",
+    weights_only=True,
 )
 
-spot_factor_key = "AutoNormal.locs.spot_factors"
-
-if spot_factor_key not in ad_param_store:
-    raise KeyError(
-        f"{spot_factor_key} not found in AD+CAA parameter store. "
-        f"Available matching keys: "
-        f"{[k for k in ad_param_store if 'spot_factors' in k]}"
-    )
-
-if spot_factor_key not in ctrl_param_store:
-    raise KeyError(
-        f"{spot_factor_key} not found in Control parameter store. "
-        f"Available matching keys: "
-        f"{[k for k in ctrl_param_store if 'spot_factors' in k]}"
-    )
-
-# AutoNormal stores positive latent variables in unconstrained log space.
-# Transform back to the constrained positive abundance scale.
-ad_spot_abs_t = torch.exp(
-    ad_param_store[spot_factor_key].detach().cpu()
+ctrl_spot_abs_t = torch.load(
+    f"{spacejam_results}/CTRL_spot_factors_abs.pt",
+    map_location="cpu",
+    weights_only=True,
 )
 
-ctrl_spot_abs_t = torch.exp(
-    ctrl_param_store[spot_factor_key].detach().cpu()
+ctrl_spot_rel_t = torch.load(
+    f"{spacejam_results}/CTRL_spot_factors_rel.pt",
+    map_location="cpu",
+    weights_only=True,
 )
 
-# Convert absolute abundances into within-ROI relative proportions.
-ad_spot_rel_t = ad_spot_abs_t / ad_spot_abs_t.sum(
-    dim=1,
-    keepdim=True,
-)
+# Convert to NumPy
 
-ctrl_spot_rel_t = ctrl_spot_abs_t / ctrl_spot_abs_t.sum(
-    dim=1,
-    keepdim=True,
-)
+ad_spot_abs = ad_spot_abs_t.cpu().numpy()
+ad_spot_rel = ad_spot_rel_t.cpu().numpy()
 
-# Convert to NumPy arrays for the existing helper functions.
-ad_spot_abs = ad_spot_abs_t.numpy()
-ad_spot_rel = ad_spot_rel_t.numpy()
+ctrl_spot_abs = ctrl_spot_abs_t.cpu().numpy()
+ctrl_spot_rel = ctrl_spot_rel_t.cpu().numpy()
 
-ctrl_spot_abs = ctrl_spot_abs_t.numpy()
-ctrl_spot_rel = ctrl_spot_rel_t.numpy()
+# =============================================================================
+# Validate tensors
+# =============================================================================
 
-## Sanity checks
-
+print("\n===== AD+CAA =====")
+print("Shape:", ad_spot_abs.shape)
+print("Absolute range:", ad_spot_abs.min(), ad_spot_abs.max())
+print("Relative range:", ad_spot_rel.min(), ad_spot_rel.max())
 print(
-    "AD+CAA absolute abundance range:",
-    ad_spot_abs.min(),
-    ad_spot_abs.max(),
+    "Row sums:",
+    ad_spot_rel.sum(axis=1).min(),
+    ad_spot_rel.sum(axis=1).max(),
 )
 
+print("\n===== Control =====")
+print("Shape:", ctrl_spot_abs.shape)
+print("Absolute range:", ctrl_spot_abs.min(), ctrl_spot_abs.max())
+print("Relative range:", ctrl_spot_rel.min(), ctrl_spot_rel.max())
 print(
-    "Control absolute abundance range:",
-    ctrl_spot_abs.min(),
-    ctrl_spot_abs.max(),
-)
-
-print(
-    "AD+CAA first relative row sums:",
-    ad_spot_rel.sum(axis=1)[:5],
-)
-
-print(
-    "Control first relative row sums:",
-    ctrl_spot_rel.sum(axis=1)[:5],
+    "Row sums:",
+    ctrl_spot_rel.sum(axis=1).min(),
+    ctrl_spot_rel.sum(axis=1).max(),
 )
 
 assert (ad_spot_abs > 0).all()
 assert (ctrl_spot_abs > 0).all()
 
 assert torch.allclose(
-    torch.tensor(ad_spot_rel.sum(axis=1)),
-    torch.ones(ad_spot_rel.shape[0]),
+    ad_spot_rel_t.sum(dim=1),
+    torch.ones(ad_spot_rel_t.shape[0]),
     atol=1e-5,
 )
 
 assert torch.allclose(
-    torch.tensor(ctrl_spot_rel.sum(axis=1)),
-    torch.ones(ctrl_spot_rel.shape[0]),
+    ctrl_spot_rel_t.sum(dim=1),
+    torch.ones(ctrl_spot_rel_t.shape[0]),
     atol=1e-5,
 )
 
-## Save corrected constrained-space abundance tensors
+# Verify that relative abundances equal normalized absolute abundances
 
-torch.save(
-    ad_spot_abs_t,
-    f"{spacejam_results}/ADCAA_spot_factors_abs.pt",
-)
+ad_check = ad_spot_abs_t / ad_spot_abs_t.sum(dim=1, keepdim=True)
+ctrl_check = ctrl_spot_abs_t / ctrl_spot_abs_t.sum(dim=1, keepdim=True)
 
-torch.save(
-    ad_spot_rel_t,
-    f"{spacejam_results}/ADCAA_spot_factors_rel.pt",
-)
+assert torch.allclose(ad_check, ad_spot_rel_t, atol=1e-6)
+assert torch.allclose(ctrl_check, ctrl_spot_rel_t, atol=1e-6)
 
-torch.save(
-    ctrl_spot_abs_t,
-    f"{spacejam_results}/CTRL_spot_factors_abs.pt",
-)
+print("\nSpaceJam abundance tensors validated.")
 
-torch.save(
-    ctrl_spot_rel_t,
-    f"{spacejam_results}/CTRL_spot_factors_rel.pt",
-)
-
-## Add cell-type labels
-
-#These labels should match the regression-derived signature columns.
-## Load condition-specific cell-type labels
+# =============================================================================
+# Load regression signatures
+# =============================================================================
 
 signature_dir = (
     "/N/u/echimal/Quartz/Desktop/CLR_MRI/"
-    "Human_GeoMx_Sep2025/Regression-model"
+    "Human_GeoMx_Sep2025/"
+    "multiomic-spatial-integration/results/regression_model"
 )
 
 ad_signature = pd.read_csv(
     f"{signature_dir}/AD+CAA_inferred_signatures.csv",
-    index_col=0
+    index_col=0,
 )
 
 ctrl_signature = pd.read_csv(
     f"{signature_dir}/Control_inferred_signatures.csv",
-    index_col=0
+    index_col=0,
 )
 
 ad_labels = ad_signature.columns.tolist()
 ctrl_labels = ctrl_signature.columns.tolist()
 
-# Sanity checks: factor counts must match signature columns
-if ad_spot_abs.shape[1] != len(ad_labels):
-    raise ValueError(
-        f"AD+CAA factor count mismatch: "
-        f"{ad_spot_abs.shape[1]} spot-factor columns vs "
-        f"{len(ad_labels)} signature labels."
-    )
+assert ad_labels == ctrl_labels
 
-if ctrl_spot_abs.shape[1] != len(ctrl_labels):
-    raise ValueError(
-        f"Control factor count mismatch: "
-        f"{ctrl_spot_abs.shape[1]} spot-factor columns vs "
-        f"{len(ctrl_labels)} signature labels."
-    )
+print("\nFactor order validation passed.")
+print("Number of factors:", len(ad_labels))
+print("First five:", ad_labels[:5])
+print("Last five:", ad_labels[-5:])
 
-print("AD+CAA label order:")
-print(ad_labels)
+# =============================================================================
+# Validate factor dimensions
+# =============================================================================
 
-print("Control label order:")
-print(ctrl_labels)
+assert ad_spot_abs.shape[1] == len(ad_labels)
+assert ctrl_spot_abs.shape[1] == len(ctrl_labels)
 
-## Build condition-specific metadata tables
+print("\nFactor dimensions validated.")
 
-ad_obs = adata_wta.obs[
-    adata_wta.obs["disease_status"] == "AD-CAA"
-].copy()
+# =============================================================================
+# Split metadata
+# =============================================================================
 
-ctrl_obs = adata_wta.obs[
-    adata_wta.obs["disease_status"] == "Control"
-].copy()
+ad_obs = (
+    adata_wta.obs[
+        adata_wta.obs["disease_status"] == "AD-CAA"
+    ]
+    .copy()
+)
 
-# Sanity checks: ROI counts must match model rows
-if ad_spot_abs.shape[0] != ad_obs.shape[0]:
-    raise ValueError(
-        f"AD+CAA ROI count mismatch: "
-        f"{ad_spot_abs.shape[0]} spot-factor rows vs "
-        f"{ad_obs.shape[0]} metadata rows."
-    )
+ctrl_obs = (
+    adata_wta.obs[
+        adata_wta.obs["disease_status"] == "Control"
+    ]
+    .copy()
+)
 
-if ctrl_spot_abs.shape[0] != ctrl_obs.shape[0]:
-    raise ValueError(
-        f"Control ROI count mismatch: "
-        f"{ctrl_spot_abs.shape[0]} spot-factor rows vs "
-        f"{ctrl_obs.shape[0]} metadata rows."
-    )
+assert ad_spot_abs.shape[0] == ad_obs.shape[0]
+assert ctrl_spot_abs.shape[0] == ctrl_obs.shape[0]
 
-## Build abundance data frames
+print("ROI dimensions validated.")
+
+# =============================================================================
+# Build abundance dataframes
+# =============================================================================
 
 ad_abs_df = make_abundance_dataframe(
     spot_factors=ad_spot_abs,
     obs=ad_obs,
-    celltype_labels=ad_labels
+    celltype_labels=ad_labels,
 )
 
 ad_rel_df = make_abundance_dataframe(
     spot_factors=ad_spot_rel,
     obs=ad_obs,
-    celltype_labels=ad_labels
+    celltype_labels=ad_labels,
 )
 
 ctrl_abs_df = make_abundance_dataframe(
     spot_factors=ctrl_spot_abs,
     obs=ctrl_obs,
-    celltype_labels=ctrl_labels
+    celltype_labels=ctrl_labels,
 )
 
 ctrl_rel_df = make_abundance_dataframe(
     spot_factors=ctrl_spot_rel,
     obs=ctrl_obs,
-    celltype_labels=ctrl_labels
+    celltype_labels=ctrl_labels,
 )
 
-## Create long-format relative-abundance tables
+# =============================================================================
+# Long-format relative abundance
+# =============================================================================
 
 ad_long_rel = make_long_abundance_table(
     abundance_df=ad_rel_df,
     celltype_labels=ad_labels,
-    abundance_col="rel_abundance"
+    abundance_col="rel_abundance",
 )
 
 ctrl_long_rel = make_long_abundance_table(
     abundance_df=ctrl_rel_df,
     celltype_labels=ctrl_labels,
-    abundance_col="rel_abundance"
+    abundance_col="rel_abundance",
 )
 
 abundance_long_rel = pd.concat(
     [ad_long_rel, ctrl_long_rel],
-    axis=0,
-    ignore_index=True
+    ignore_index=True,
 )
 
-## Create long-format absolute-abundance tables
+# =============================================================================
+# Long-format absolute abundance
+# =============================================================================
 
 ad_long_abs = make_long_abundance_table(
     abundance_df=ad_abs_df,
     celltype_labels=ad_labels,
-    abundance_col="abs_abundance"
+    abundance_col="abs_abundance",
 )
 
 ctrl_long_abs = make_long_abundance_table(
     abundance_df=ctrl_abs_df,
     celltype_labels=ctrl_labels,
-    abundance_col="abs_abundance"
+    abundance_col="abs_abundance",
 )
 
 abundance_long_abs = pd.concat(
     [ad_long_abs, ctrl_long_abs],
+    ignore_index=True,
+)
+
+# =============================================================================
+# Final validation
+# =============================================================================
+
+print("\n===== Final validation =====")
+
+print("Relative rows:", abundance_long_rel.shape)
+print("Absolute rows:", abundance_long_abs.shape)
+
+print(
+    "Unique ROIs:",
+    abundance_long_rel["ROI_ID"].nunique(),
+)
+
+print(
+    "Unique cell types:",
+    abundance_long_rel["celltype"].nunique(),
+)
+
+assert (
+    abundance_long_rel["ROI_ID"].nunique()
+    == adata_wta.n_obs
+)
+
+assert (
+    abundance_long_rel["celltype"].nunique()
+    == len(ad_labels)
+)
+
+print("Output tables validated.")
+
+print("\nRelative abundance preview")
+print(abundance_long_rel.head())
+
+print("\nAbsolute abundance preview")
+print(abundance_long_abs.head())
+
+# ============================================================
+# Create combined wide-format table (one row per ROI)
+# ============================================================
+
+wide_df = pd.concat(
+    [ad_rel_df, ctrl_rel_df],
     axis=0,
     ignore_index=True
 )
 
-print("\nRelative abundance preview:")
-print(abundance_long_rel.head())
+# =============================================================================
+# Save outputs
+# =============================================================================
 
-print("\nAbsolute abundance preview:")
-print(abundance_long_abs.head())
-
-## Save outputs
+output_dir = "results/cell_proportions"
 
 save_abundance_outputs(
-    output_dir="results/cell_proportions",
+    output_dir=output_dir,
     ad_abs_df=ad_abs_df,
     ad_rel_df=ad_rel_df,
     ctrl_abs_df=ctrl_abs_df,
     ctrl_rel_df=ctrl_rel_df,
-    long_df=abundance_long_rel
+    long_df=abundance_long_rel,
 )
 
-# Explicitly save the relative-abundance long table used downstream
 abundance_long_rel.to_csv(
-    "results/cell_proportions/roi_celltype_abundance_long.csv",
+    f"{output_dir}/roi_celltype_abundance_long.csv",
+    index=False,
+)
+
+abundance_long_abs.to_csv(
+    f"{output_dir}/roi_celltype_abundance_long_abs.csv",
+    index=False,
+)
+
+wide_df.to_csv(
+    "results/cell_proportions/cell2location_abundance_wide_with_meta.csv",
+    index=False
+)
+abundance_long_rel.to_csv(
+    "results/cell_proportions/cell2location_abundance_long_rel.csv",
     index=False
 )
 
-# Save the absolute-abundance long table separately
-abundance_long_abs.to_csv(
-    "results/cell_proportions/roi_celltype_abundance_long_abs.csv",
-    index=False
+# This is the file consumed by the downstream R notebooks.
+
+abundance_long_rel.to_csv(
+    f"{output_dir}/spatial_celltype_proportions_for_R.csv",
+    index=False,
 )
 
 print("\nSaved:")
-print("  results/cell_proportions/roi_celltype_abundance_long.csv")
-print("  results/cell_proportions/roi_celltype_abundance_long_abs.csv")
+print(f"  {output_dir}/roi_celltype_abundance_long.csv")
+print(f"  {output_dir}/roi_celltype_abundance_long_abs.csv")
+print(f"  {output_dir}/spatial_celltype_proportions_for_R.csv")
+
+print("\nNotebook 4 completed successfully.")

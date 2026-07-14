@@ -24,6 +24,18 @@ __pycache__/
 results/pseudobulk_validation/
 results/cell_proportions/
 
+# Regenerable regression model internals
+results/regression_model/*_regression_model/
+results/regression_model/*_mean_cluster_expr.csv
+
+# Regenerable Pyro parameter stores
+results/spacejam/*_param_store.pt
+
+# Local archives and generated figures
+results/Archive/
+results/Script_results/
+figures/
+
 # Downloaded pathway databases
 resources/gmt/
 # ======================================================
