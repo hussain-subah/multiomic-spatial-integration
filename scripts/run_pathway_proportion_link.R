@@ -31,10 +31,21 @@ gmt_file <- "resources/gmt/Reactome_2022.gmt" #KEGG_2021_Human.gmt # or #WikiPat
 # restrict to specific cell types.
 celltypes <- NULL
 
-# NULL = pooled across all ROIs; or e.g. "pathology" / "region" to run the
-# analysis separately within each level of that column (avoids conflating
-# a cell-type/gene association with a between-condition difference).
-stratify_by <- NULL
+# NULL = pooled across all ROIs; or e.g. "pathology" / "region" /
+# "disease_pathology_group" / "disease_pathology_region_group" (see below)
+# to run the analysis separately within each level of that column (avoids
+# conflating a cell-type/gene association with a between-condition
+# difference). Note: per-stratum n gets small once region is folded in too
+# (as low as ~13 ROIs for AD-CAA/Amyloid/Capillaries) -- expect noisier
+# rankings/GSEA there than in the coarser disease_pathology_group split.
+stratify_by <- "disease_pathology_region_group"
+
+# Optional pre-filters applied to proportions_df before anything else runs,
+# for restricting to an intersection of columns that stratify_by alone can't
+# express (e.g. pathology == "Amyloid" AND region == "Capillaries").
+# NULL = no filtering on that column.
+pathology_filter <- NULL
+region_filter <- NULL
 
 roi_id_col <- "ROI_ID"
 proportion_col <- "rel_abundance"
@@ -52,6 +63,34 @@ expr_norm <- normalize_expression_cpm(expr_raw)
 
 proportions_df <- read.csv(proportions_csv, stringsAsFactors = FALSE)
 
+# Derived Control / AD-AmyloidFree / AD-Amyloid grouping. There's no
+# Control x Amyloid combination in this dataset (Control ROIs are always
+# AmyloidFree), so this collapses the theoretical 2x2 of disease_status x
+# pathology down to the 3 groups that actually exist.
+proportions_df$disease_pathology_group <- ifelse(
+  proportions_df$disease_status == "Control",
+  "Control",
+  paste0("AD_", proportions_df$pathology)
+)
+
+# Same 3 groups, further split by vascular region (all 3 x 3 combinations
+# exist in this dataset, with per-stratum ROI counts from ~13 to ~33).
+proportions_df$disease_pathology_region_group <- paste(
+  proportions_df$disease_pathology_group,
+  proportions_df$region,
+  sep = "_"
+)
+
+if (!is.null(pathology_filter)) {
+  proportions_df <- proportions_df[proportions_df$pathology == pathology_filter, ]
+}
+if (!is.null(region_filter)) {
+  proportions_df <- proportions_df[proportions_df$region == region_filter, ]
+}
+if (nrow(proportions_df) == 0) {
+  stop("pathology_filter/region_filter left 0 rows in proportions_df -- check the values match the CSV.")
+}
+
 if (is.null(celltypes)) {
   celltypes <- unique(proportions_df[[celltype_col]])
 }
@@ -65,6 +104,13 @@ strata <- if (is.null(stratify_by)) {
 } else {
   split(proportions_df, proportions_df[[stratify_by]])
 }
+
+skipped <- data.frame(
+  celltype = character(0),
+  stratum = character(0),
+  reason = character(0),
+  stringsAsFactors = FALSE
+)
 
 for (stratum_name in names(strata)) {
 
@@ -86,6 +132,12 @@ for (stratum_name in names(strata)) {
       ),
       error = function(e) {
         message("  Skipped: ", conditionMessage(e))
+        skipped <<- rbind(skipped, data.frame(
+          celltype = ct,
+          stratum = stratum_name,
+          reason = conditionMessage(e),
+          stringsAsFactors = FALSE
+        ))
         NULL
       }
     )
@@ -132,6 +184,24 @@ for (stratum_name in names(strata)) {
       )
     }
   }
+}
+
+if (nrow(skipped) > 0) {
+  message(sprintf("\n%d celltype/stratum combination(s) skipped:", nrow(skipped)))
+  for (i in seq_len(nrow(skipped))) {
+    message(sprintf(
+      "  - celltype = %s, stratum = %s: %s",
+      skipped$celltype[i], skipped$stratum[i], skipped$reason[i]
+    ))
+  }
+
+  write.csv(
+    skipped,
+    file = file.path(output_dir, "skipped_celltypes.csv"),
+    row.names = FALSE
+  )
+} else {
+  message("\nNo celltype/stratum combinations were skipped.")
 }
 
 message("Pathway-proportion linkage analysis completed.")

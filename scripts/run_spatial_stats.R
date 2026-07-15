@@ -120,18 +120,19 @@ write.csv(
 )
 
 # ============================================================
-# Cell-type co-occurrence (CLR-transformed, stratified by region)
+# Cell-type co-occurrence (CLR-transformed, stratified by region x
+# disease/pathology group -- note this drops per-stratum n to ~3-4 ROIs)
 # ============================================================
 
 cooccurrence_res <- run_celltype_cooccurrence(
   df = df,
   abundance_col = "rel_abundance",
-  stratify_by = "region"
+  stratify_by = c("region", "disease_status", "pathology")
 )
 
 write.csv(
   cooccurrence_res,
-  file = file.path(output_dir, "celltype_cooccurrence_by_region.csv"),
+  file = file.path(output_dir, "celltype_cooccurrence_by_group.csv"),
   row.names = FALSE
 )
 
