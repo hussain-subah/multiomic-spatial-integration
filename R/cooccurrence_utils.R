@@ -11,9 +11,11 @@
 #' are near-exclusive to Arteries), so correlations are computed separately
 #' within each `region` stratum rather than pooled — pooling would mostly
 #' recover "which region is this ROI" rather than genuine co-occurrence.
-#' Stratifying further by disease/pathology `group` is a natural extension
-#' but is left out here given the smaller per-cell sample sizes that would
-#' result.
+#' `stratify_by` also accepts multiple columns (e.g. `c("region",
+#' "disease_status", "pathology")`) to stratify further by disease/pathology
+#' group; note this shrinks the per-stratum sample size (down to ~3-4 ROIs
+#' per stratum in this dataset), so correlations get noisier the finer the
+#' stratification.
 #'
 #' @keywords internal
 NULL
@@ -54,12 +56,13 @@ compute_clr <- function(prop_mat, eps = 1e-6) {
 #'
 #' @param df Cleaned dataframe (as returned by `prepare_spatial_proportion_data`).
 #' @param abundance_col Relative abundance column.
-#' @param stratify_by Column to stratify correlations by. Defaults to
-#'   `"region"`.
+#' @param stratify_by One or more columns to stratify correlations by.
+#'   Defaults to `"region"`; pass e.g. `c("region", "disease_status",
+#'   "pathology")` to also stratify by disease/pathology group.
 #' @param min_n Minimum number of complete ROIs required within a stratum
 #'   before computing correlations for it.
 #'
-#' @return Long-format data frame: stratify_by column, celltype_1,
+#' @return Long-format data frame: stratify_by column(s), celltype_1,
 #'   celltype_2, r, p.value, p_adj, n.
 #' @export
 run_celltype_cooccurrence <- function(df,
@@ -69,12 +72,12 @@ run_celltype_cooccurrence <- function(df,
   wide_dat <- df |>
     dplyr::select(dplyr::all_of(c("Scan_ID", stratify_by, "celltype", abundance_col))) |>
     dplyr::filter(
+      dplyr::if_all(dplyr::all_of(stratify_by), ~ !is.na(.x)),
       !is.na(.data[[abundance_col]]),
-      !is.na(.data[[stratify_by]]),
       !is.na(.data$Scan_ID),
       !is.na(.data$celltype)
     ) |>
-    dplyr::group_by(.data$Scan_ID, .data[[stratify_by]], .data$celltype) |>
+    dplyr::group_by(dplyr::across(dplyr::all_of(c("Scan_ID", stratify_by, "celltype")))) |>
     dplyr::summarise(
       abundance = mean(.data[[abundance_col]], na.rm = TRUE),
       .groups = "drop"
@@ -91,12 +94,16 @@ run_celltype_cooccurrence <- function(df,
     return(data.frame())
   }
 
-  strata <- unique(wide_dat[[stratify_by]])
+  strata_df <- unique(wide_dat[, stratify_by, drop = FALSE])
   result_list <- list()
 
-  for (grp in strata) {
+  for (i in seq_len(nrow(strata_df))) {
 
-    sub <- wide_dat[wide_dat[[stratify_by]] == grp, celltype_cols, drop = FALSE]
+    grp_vals <- strata_df[i, , drop = FALSE]
+
+    keep <- Reduce(`&`, lapply(stratify_by, function(col) wide_dat[[col]] == grp_vals[[col]]))
+
+    sub <- wide_dat[keep, celltype_cols, drop = FALSE]
 
     sub <- sub[, colSums(!is.na(sub)) > 0, drop = FALSE]
 
@@ -134,8 +141,12 @@ run_celltype_cooccurrence <- function(df,
 
     if (nrow(pair_df) == 0) next
 
-    pair_df[[stratify_by]] <- grp
-    result_list[[as.character(grp)]] <- pair_df
+    for (col in stratify_by) {
+      pair_df[[col]] <- grp_vals[[col]]
+    }
+
+    strata_key <- paste(unlist(grp_vals), collapse = "_")
+    result_list[[strata_key]] <- pair_df
   }
 
   cooc_df <- dplyr::bind_rows(result_list)

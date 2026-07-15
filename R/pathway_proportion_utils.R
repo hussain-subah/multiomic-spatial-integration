@@ -142,6 +142,120 @@ rank_genes_by_celltype_association <- function(expr_mat,
 }
 
 
+#' Default pattern for generic/housekeeping Reactome pathways
+#'
+#' Translation, ribosome, spliceosome, NMD, oxidative phosphorylation, and
+#' the oversized "Olfactory Receptor" gene family recur as GSEA hits for
+#' almost any broad transcriptional-activity signal, regardless of the cell
+#' type driving it -- flagged here so they can be excluded when looking for
+#' cell-type-specific signal.
+#'
+#' @keywords internal
+.housekeeping_pathway_pattern <- paste(
+  "Respiratory", "Electron Transport", "Ribosom", "rRNA", "Translation",
+  "Spliceosome", "Processing Of Capped", "mRNA Splicing",
+  "Nonsense.Mediated", "SRP.dependent", "Citric Acid", "Olfactory",
+  "Selenocysteine", "Selenoamino", "Influenza", "Complex I Biogenesis",
+  "Cristae Formation",
+  sep = "|"
+)
+
+
+#' Load and combine every `pathway_enrichment.csv` under a pathway-linkage dir
+#'
+#' Recurses the `<stratum>/<celltype>/pathway_enrichment.csv` directory
+#' layout written by `scripts/run_pathway_proportion_link.R` and stacks every
+#' file into one long data frame, tagging each row with the stratum and cell
+#' type its enrichment came from.
+#'
+#' @param pathway_dir Root directory (e.g. `results/pathway_proportion_link`).
+#' @return Data frame: `stratum, celltype, pathway, pval, padj, NES, size`.
+#' @export
+load_pathway_enrichment_dir <- function(pathway_dir) {
+  files <- list.files(
+    pathway_dir, pattern = "pathway_enrichment\\.csv$",
+    recursive = TRUE, full.names = TRUE
+  )
+
+  if (length(files) == 0) {
+    stop(
+      "load_pathway_enrichment_dir: no pathway_enrichment.csv files found ",
+      "under '", pathway_dir, "'.", call. = FALSE
+    )
+  }
+
+  read_one <- function(f) {
+    rel <- sub(paste0("^", pathway_dir, "/?"), "", f)
+    parts <- strsplit(rel, "/", fixed = TRUE)[[1]]
+    df <- utils::read.csv(f, stringsAsFactors = FALSE)
+    if (nrow(df) == 0) return(NULL)
+    df$stratum <- parts[1]
+    df$celltype <- parts[2]
+    df[, c("stratum", "celltype", "pathway", "pval", "padj", "NES", "size")]
+  }
+
+  do.call(rbind, lapply(files, read_one))
+}
+
+
+#' Flag generic/housekeeping pathways and count cross-combination frequency
+#'
+#' For each pathway, counts how many `(celltype, stratum)` combinations it is
+#' significant in. A pathway significant in nearly every combination is very
+#' likely tracking a shared technical or compositional confound (sequencing
+#' depth, overall transcriptional activity, or the closure constraint that
+#' compositional proportions sum to ~1) rather than being independent
+#' cell-type-specific biology; a pathway significant in only a handful is a
+#' much more credible cell-type-restricted hit.
+#'
+#' @param combined_df Output of `load_pathway_enrichment_dir()`.
+#' @param padj_cutoff Significance threshold.
+#' @param housekeeping_pattern Regex (OR-joined) flagging generic pathways.
+#' @return List with:
+#'   - `frequency`: one row per unique pathway (`pathway`, `n_significant`,
+#'     `is_housekeeping`), sorted by `n_significant` descending.
+#'   - `significant`: the significant subset of `combined_df`, merged with
+#'     `n_significant`/`is_housekeeping`.
+#' @export
+compute_pathway_specificity <- function(combined_df, padj_cutoff = 0.05,
+                                        housekeeping_pattern = .housekeeping_pathway_pattern) {
+  sig <- combined_df[!is.na(combined_df$padj) & combined_df$padj < padj_cutoff, ]
+
+  freq <- as.data.frame(table(sig$pathway), stringsAsFactors = FALSE)
+  colnames(freq) <- c("pathway", "n_significant")
+  freq$is_housekeeping <- grepl(housekeeping_pattern, freq$pathway, ignore.case = TRUE)
+  freq <- freq[order(-freq$n_significant), ]
+
+  sig <- merge(sig, freq, by = "pathway")
+
+  list(frequency = freq, significant = sig)
+}
+
+
+#' Top cell-type-restricted, non-housekeeping pathways, per stratum
+#'
+#' Filters `compute_pathway_specificity()`'s significant hits down to
+#' pathways that are (a) not flagged as generic/housekeeping and (b)
+#' significant in at most `max_frequency` of the total `(celltype, stratum)`
+#' combinations, then keeps the top `top_n` per stratum by adjusted p-value.
+#'
+#' @param specificity_result Output of `compute_pathway_specificity()`.
+#' @param max_frequency Maximum global `n_significant` count to keep (i.e.
+#'   the specificity threshold).
+#' @param top_n Number of rows to keep per stratum.
+#' @return Data frame sorted by `stratum`, then `padj` ascending.
+#' @export
+top_specific_pathways_by_stratum <- function(specificity_result, max_frequency = 10, top_n = 15) {
+  sig <- specificity_result$significant
+  candidates <- sig[!sig$is_housekeeping & sig$n_significant <= max_frequency, ]
+
+  do.call(rbind, lapply(split(candidates, candidates$stratum), function(df) {
+    df <- df[order(df$padj), ]
+    utils::head(df, top_n)
+  }))
+}
+
+
 #' Run rank-based gene set enrichment on a ranked gene list
 #'
 #' @param ranked_genes Data frame from `rank_genes_by_celltype_association()`

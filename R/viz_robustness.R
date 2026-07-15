@@ -10,9 +10,18 @@ NULL
 #'
 #' Reads a `<contrast>_robustness.csv` (full estimate plus the min/max of the
 #' leave-one-Scan-out refits) and plots, per region x cell-type, the full
-#' estimate as a point with the leave-one-out range as a horizontal bar --
-#' flagging results whose significance call flips when any single scan is
-#' dropped. Only the most-affected rows are shown to keep the figure legible.
+#' estimate as a point with the leave-one-out range as a horizontal bar.
+#' Points are colored by severity: a result whose *direction* flips when a
+#' single scan is dropped (`any_direction_flip`) is a materially worse finding
+#' than one that merely crosses the significance threshold
+#' (`any_sig_flip`), so the two are shown as distinct tiers rather than
+#' collapsed into one flag. Only the most-affected rows are shown to keep the
+#' figure legible.
+#'
+#' Some robustness files (e.g. `overall_effect_robustness.csv`) stack more
+#' than one `contrast` (Disease_effect/Amyloid_effect/AD_overall_vs_Control)
+#' for the same region x cell-type pair -- the y-axis label includes the
+#' contrast whenever the file has more than one, so those rows don't collide.
 #'
 #' @param robustness_csv Path to a `<contrast>_robustness.csv`.
 #' @param contrast_label Label for the title/filename.
@@ -29,9 +38,31 @@ plot_robustness_caterpillar <- function(robustness_csv, contrast_label, output_d
     return(invisible(NULL))
   }
 
+  if (!"any_sig_flip" %in% colnames(df)) df$any_sig_flip <- FALSE
+  if (!"any_direction_flip" %in% colnames(df)) df$any_direction_flip <- FALSE
+
+  df$flip_status <- ifelse(
+    df$any_direction_flip, "direction flips",
+    ifelse(df$any_sig_flip, "significance flips", "stable")
+  )
+  df$flip_status <- factor(
+    df$flip_status,
+    levels = c("stable", "significance flips", "direction flips")
+  )
+
   df <- df[order(-df$max_abs_delta), ]
   df <- utils::head(df, top_n)
-  df$label <- paste(df$region, df$celltype, sep = " | ")
+
+  df$label <- if ("contrast" %in% colnames(df) && length(unique(df$contrast)) > 1) {
+    paste(df$region, df$celltype, df$contrast, sep = " | ")
+  } else {
+    paste(df$region, df$celltype, sep = " | ")
+  }
+
+  if (anyDuplicated(df$label) > 0) {
+    df$label <- make.unique(df$label, sep = " #")
+  }
+
   df <- df[order(df$full_estimate), ]
   df$label <- factor(df$label, levels = df$label)
 
@@ -42,12 +73,15 @@ plot_robustness_caterpillar <- function(robustness_csv, contrast_label, output_d
       color = "grey65", linewidth = 0.8
     ) +
     ggplot2::geom_point(
-      ggplot2::aes(x = full_estimate, color = any_sig_flip), size = 2
+      ggplot2::aes(x = full_estimate, color = flip_status), size = 2
     ) +
     ggplot2::scale_color_manual(
-      values = c("FALSE" = "grey30", "TRUE" = "#B2182B"),
-      labels = c("FALSE" = "stable", "TRUE" = "significance flips"),
-      name = NULL
+      values = c(
+        "stable" = "grey30",
+        "significance flips" = "#E69F00",
+        "direction flips" = "#B2182B"
+      ),
+      name = NULL, drop = FALSE
     ) +
     ggplot2::labs(
       title = paste0(contrast_label, ": leave-one-Scan-out robustness"),
