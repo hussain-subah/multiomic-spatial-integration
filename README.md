@@ -155,9 +155,9 @@ These files:
 Recommended usage
 * Use the .py scripts in notebooks → reproducible pipeline execution
 * Use the Examples/ folder for:
-      * understanding the workflow
-      * exploratory analysis
-      * adapting to new datasets
+      - understanding the workflow
+      - exploratory analysis
+      - adapting to new datasets
 
 ## Stage 1: snRNA-seq Reference Preparation
 Annotated snRNA-seq data are used as the cellular reference for spatial deconvolution.
@@ -345,14 +345,14 @@ This identifies biological pathways associated with changes in spatial abundance
 
 ## Stage 8: Deconvolution benchmarking (WORK IN PROGRESS)
 A modular benchmarking framework compares the Bayesian model against multiple deconvolution algorithms, including
-   • SpatialDecon
-   • MuSiC
-   • Bisque
-   • DWLS
-   • BayesPrism   
-   • SPOTlight
-   • RCTD   
-   • STdeconvolve
+   - SpatialDecon
+   - MuSiC
+   - Bisque
+   - DWLS
+   - BayesPrism   
+   - SPOTlight
+   - RCTD   
+   - STdeconvolve
 
 with standardized outputs for method agreement and reproducibility.
 
