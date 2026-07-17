@@ -155,6 +155,7 @@ These files:
 Recommended usage
 * Use the .py scripts in notebooks → reproducible pipeline execution
 * Use the Examples/ folder for:
+  
       - understanding the workflow
       - exploratory analysis
       - adapting to new datasets
