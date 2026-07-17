@@ -130,7 +130,7 @@ multiomic-spatial-integration/
 ├── CHANGELOG
 └── .gitignore
 ```
-### Note: Files under 'notebooks'
+# Note: Files under 'notebooks'
 These files represent the modular, production-ready pipeline for spatial transcriptomics integration.
 Although organized under notebooks/, they are implemented as .py scripts for:
    * reproducibility
@@ -144,6 +144,7 @@ Each script:
 
 ### Example notebooks:
 This folder contains the original interactive notebooks and R Markdown files used during method development.
+
 **Since V0.02 the Notebooks have had some bugs identified and fixed directly to the Notebooks and the example files are illustrative of the intital versions.**
 
 These files:
@@ -432,6 +433,7 @@ related spatial transcriptomic platforms.
 | Figure generation      |    🟡   |
 
 ### Workflow
+```text
                    ST / snRNA-seq
                         │
                         ▼
@@ -455,6 +457,7 @@ related spatial transcriptomic platforms.
         └───────────────┼────────────────┘
                         ▼
              Biological interpretation
+```
 
 ## Highlights
 
