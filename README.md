@@ -1,5 +1,5 @@
 # multiomic-spatial-integration
-Integrated single-nucleus RNA-seq and GeoMx WTA spatial transcriptomics workflow for cell-type-resolved spatial deconvolution.
+A modular computational framework for integrating single-cell and spatial transcriptomics through Bayesian deconvolution, statistical modeling, biological validation, and downstream pathway analysis.
 
 🚧 Work in progress
 
@@ -23,14 +23,19 @@ The example biological use case focuses on AD/CAA versus control human brain tis
 
 ## Workflow Summary
 
-The workflow consists of five major stages:
+The workflow consists of ten major stages:
 
 1. snRNA-seq preprocessing, QC, clustering, subclustering, and cell-type annotation  
 2. GeoMx WTA processing, QC, and AnnData object construction  
 3. Regression-based cell-type signature inference and Bayesian spatial deconvolution
    Note: training signatures separately for AD vs Control, however, If there is only a unified reference. this can also be made with this repo.
+4. SVI spatial deconvolution
 5. Extraction, normalization, and annotation of spatial cell-type abundances  
-6. Statistical analysis of inferred cell-type proportions and spatial visualization  
+6. Statistical analysis of inferred cell-type proportions and spatial visualization
+7. Biological validation
+8. Pathway analysis
+9. Method comparison
+10. Figure generation
 
 This structure follows the integrated workflow described in the internal project documentation. 
 
@@ -41,28 +46,39 @@ This structure follows the integrated workflow described in the internal project
 ```text
 multiomic-spatial-integration/
 ├── R/
-│   ├── signature_export_utils.R          # Export cell-type signatures
+│   ├── signature_export_utils.R          # Export cell-type signatures from snRNA-seq references
 │   ├── proportion_stats_utils.R          # Beta mixed models for inferred proportions
 │   ├── contrast_utils.R                  # Disease, amyloid, and weighted contrasts
-│   ├── enrichment_utils.R                # Pathway sanity-check inputs
-│   └── plotting_utils.R                  # Heatmaps, dotplots, boxplots
+│   ├── enrichment_utils.R                # Marker gene extraction and enrichment helpers
+│   ├── pathway_proportion_utils.R        # Correlate cell-type abundance with spatial expression and enrichment
+│   ├── marker_concordance_utils.R        # Validate inferred abundances using independent marker-gene expression
+│   ├── robustness_utils.R                # Leave-one-scan-out robustness analyses for spatial contrasts
+│   ├── cooccurrence_utils.R              # CLR-based cell-type co-occurrence and spatial correlation analysis
+│   └── plotting_utils.R                  # Heatmaps, dotplots, boxplots, and summary visualizations
+│   #Note: Several viz_xxx.R files are still being validated and mapped to the workflow
 │
 ├── python/
-│   ├── geomx_anndata_utils.py            # Build AnnData from GeoMx WTA matrices
-│   ├── regression_utils.py               # Cell2Location regression helpers
-│   ├── spacejam_pyro_utils.py            # Pyro/SpaceJam model helpers
-│   ├── abundance_extraction_utils.py     # Extract and normalize spot factors
-│   └── plotting_utils.py                 # Exploratory spatial plots
+│   ├── geomx_anndata_utils.py            # Build AnnData objects from GeoMx WTA data
+│   ├── regression_utils.py               # Cell2Location regression signature inference
+│   ├── spacejam_pyro_utils.py            # Bayesian SpaceJam / Pyro model helpers
+│   ├── abundance_extraction_utils.py     # Extract and normalize inferred abundances
+│   ├── pseudobulk_utils.py               # Generate synthetic pseudobulk ROIs for model validation
+│   ├── pseudobulk_validation_utils.py    # Evaluate deconvolution recovery on synthetic datasets
+│   └── plotting_utils.py                 # Exploratory spatial plotting utilities
 │
 ├── models/
 │   └── LocationModelWTAMultiExperimentHierarchicalGeneLevel_Modified.py
 │
 ├── notebooks/
-│   ├── 01_wta_to_anndata.py            #Convert GeoMx WTA outputs into AnnData format
-│   ├── 02_regression_signatures.py     #Learn cell-type gene signatures via regression (preferred)
-│   ├── 03_spacejam_cell2location.py    #Run Bayesian spatial deconvolution (Cell2Location / SpaceJam)
-│   ├── 04_extract_cell_proportions.py  #Extract and normalize inferred cell-type abundances
-│   ├──  05_plotting_and_stats.py       #Exploratory visualization and generate analysis-ready tables
+│   ├── 01_wta_to_anndata.py              # Convert GeoMx WTA outputs into AnnData format
+│   ├── 02_regression_signatures.py       # Learn cell-type gene signatures via regression (preferred)
+│   ├── 03_spacejam_cell2location.py      # Run Bayesian spatial deconvolution (Cell2Location / SpaceJam)
+│   ├── 04_extract_cell_proportions.py    # Extract and normalize inferred cell-type abundances
+│   ├── 05_plotting_and_stats.py          # Exploratory visualization and generate analysis-ready tables
+│   ├── 06_pseudobulk_validation.py       # Validate deconvolution accuracy using synthetic pseudobulk mixtures
+│   ├── run_pseudobulk_validation_gpu.sh  # Submit GPU job for pseudobulk validation workflow
+│   ├── run_regression_validation_gpu.sh  # Submit GPU job for Cell2Location regression model training
+│   ├── run_spacejam_gpu.sh               # Submit GPU job for Bayesian SpaceJam spatial deconvolution
 │   └──Examples/
 │       ├── WTA to AnnData.ipynb
 │       ├── Regression.ipynb
@@ -71,22 +87,50 @@ multiomic-spatial-integration/
 │       ├── Cell2location_Plotting_and_Stats.ipynb
 │       └── Stats_Integration.Rmd
 │
+├── resources/
+│   ├── README.md                        #Documentation for external reference resources
+│   └── download_gmt_resources.sh        #Download MSigDB and pathway GMT files
+│
 ├── scripts/
-│   ├── run_sn_reference_export.R
-│   ├── run_spatial_stats.R
-│   └── run_pathway_sanity_checks.R
+│   ├── check_marker_factor_mapping.R          # Compare regression signatures against independent marker sets
+│   ├── run_sn_reference_export.R              # Export annotated snRNA-seq reference
+│   ├── run_spatial_stats.R                    # Run spatial statistical analyses and contrasts
+│   ├── run_pathway_sanity_checks.R            # Export marker-based pathway inputs
+│   ├── run_pathway_proportion_link.R          # Associate cell-type abundance with pathway activity
+│   ├── run_marker_concordance_check.R         # Validate inferred abundances using marker concordance
+│   ├── run_contrast_robustness_check.R        # Perform leave-one-scan-out robustness analyses
+│   ├── run_all_signature_marker_validation.py # Comprehensive validation of all inferred cell-type signatures
+│   └── run_all_figures.R                      # Generate publication-ready figures from analysis outputs
 │
 ├── docs/
 │   ├── workflow_overview.md
 │   ├── geomx_anndata_structure.md
 │   ├── bayesian_deconvolution_notes.md
 │   ├── pyro_model_modifications.md
-│   └── statistical_modeling.md
+│   ├── statistical_modeling.md
+│   └── Stats_updated.md
+│
+├── data/
+│   └── nuc_count.csv    # ROI-level nuclei counts for abundance normalization and compositional analyses
+│   #Note, Rest of Raw data will be made available upon publication
+│
+├── results/
+│   ├── AD_CAA_cluster_markers.txt        # Seurat-derived marker table for the reference cell types
+│   ├── all_marker_validation/            # Integrated marker-concordance and signature-identity QC
+│   ├── cell_proportions/                 # ROI-level absolute and relative inferred abundances
+│   ├── geomx_exports/                    # GeoMx expression and negative-probe exports for downstream R analyses
+│   ├── marker_concordance/               # Real-data marker-abundance concordance results
+│   ├── pathway_proportion_link/          # Gene rankings and pathway enrichment linked to cell-type abundance
+│   ├── pseudobulk_validation/            # Held-out synthetic-mixture deconvolution validation
+│   ├── regression_model/                 # Condition-specific regression signatures and factor-order checks
+│   ├── spacejam/                         # SpaceJam model outputs, manifests, metadata, and training diagnostics
+│   └── spatial_stats/                    # Mixed-effects contrasts, heterogeneity, co-occurrence, and robustness 
 │
 ├── README.md
+├── CHANGELOG
 └── .gitignore
 ```
-### Note: Files under 'notebooks'
+# Note: Files under 'notebooks'
 These files represent the modular, production-ready pipeline for spatial transcriptomics integration.
 Although organized under notebooks/, they are implemented as .py scripts for:
    * reproducibility
@@ -101,6 +145,8 @@ Each script:
 ### Example notebooks:
 This folder contains the original interactive notebooks and R Markdown files used during method development.
 
+**Since V0.02 the Notebooks have had some bugs identified and fixed directly to the Notebooks and the example files are illustrative of the intital versions.**
+
 These files:
 * provide step-by-step exploratory workflows
 * include intermediate checks and visualizations
@@ -109,10 +155,10 @@ These files:
 Recommended usage
 * Use the .py scripts in notebooks → reproducible pipeline execution
 * Use the Examples/ folder for:
-      * understanding the workflow
-      * debugging
-      * exploratory analysis
-      * adapting to new datasets
+  
+      - understanding the workflow
+      - exploratory analysis
+      - adapting to new datasets
 
 ## Stage 1: snRNA-seq Reference Preparation
 Annotated snRNA-seq data are used as the cellular reference for spatial deconvolution.
@@ -268,42 +314,165 @@ For full details, see:
 ``` text
 docs/statistical_modeling.md
 ```
+## Stage 6: Validation framework
+Multiple orthogonal validation strategies are implemented to evaluate inferred cell-type abundances.
+
+Current validation includes:
+
+• pseudobulk recovery
+
+• independent marker-gene concordance
+
+• regression-signature identity
+
+• leave-one-scan robustness
+
+• compositional analysis
+
+• ROI nuclei normalization
+   Because inferred abundances are compositional, the framework includes dedicated analyses to distinguish
+      • true biological depletion
+      from
+      • apparent increases caused by compositional redistribution.
+
+      ROI nuclei counts can also be incorporated to normalize inferred abundance on a per-cell basis.
+
+These analyses distinguish technical failures from biologically expected subtype overlap and provide confidence in downstream interpretation.
+
+## Stage 7: Pathway association analysis
+Rather than performing enrichment on marker genes, the framework correlates inferred cell-type abundance with spatial gene expression, ranks genes by abundance association, and performs GSEA/fGSEA on those ranked lists.
+
+This identifies biological pathways associated with changes in spatial abundance.
+
+## Stage 8: Deconvolution benchmarking (WORK IN PROGRESS)
+A modular benchmarking framework compares the Bayesian model against multiple deconvolution algorithms, including
+   - SpatialDecon
+   - MuSiC
+   - Bisque
+   - DWLS
+   - BayesPrism   
+   - SPOTlight
+   - RCTD   
+   - STdeconvolve
+
+with standardized outputs for method agreement and reproducibility.
+
 ---
 
 ## Outputs
-Common outputs include:
-```
-*_inferred_signatures.csv
-*_spot_factors_abs.pt
-*_spot_factors_rel.pt
-*_roi_celltype_abundance_long.csv
-*_factor_celltype_annotation.csv
-*_beta_mixed_model_results.csv
-*_contrast_heatmap.pdf
-```
-Example Use Case
-This repository was developed for AD/CAA spatial multi-omic integration in human brain tissue.
-The workflow links:
-- transcriptionally defined snRNA-seq cell states
-- GeoMx WTA spatial ROIs
-- vascular and parenchymal pathology annotations
-- Bayesian-inferred spatial cell-type composition
-- beta mixed-effects statistical inference
+The pipeline generates outputs for each major analysis stage, including:
 
+```text
+Regression model
+├── *_inferred_signatures.csv
+├── *_mean_cluster_expr.csv
 
-This enables compartment-resolved analysis of gliovascular and neuroimmune remodeling in AD/CAA.
+Bayesian deconvolution
+├── *_spot_factors_abs.pt
+├── *_spot_factors_rel.pt
+├── *_celltype_abundance_long.csv
+
+Validation
+├── all_marker_validation/
+├── marker_concordance/
+├── pseudobulk_validation/
+
+Statistical analysis
+├── spatial_stats/
+├── pathway_proportion_link/
+```
+Most downstream analyses use the standardized abundance tables in
+`results/cell_proportions/`, allowing independent statistical workflows
+to be reproduced without rerunning Bayesian deconvolution.
+
+## Example Use Case
+
+This framework was developed for spatial multi-omic integration of
+Alzheimer's disease (AD) and cerebral amyloid angiopathy (CAA) using
+human postmortem brain tissue.
+
+The workflow integrates:
+
+- annotated single-nucleus RNA-seq reference atlases
+- GeoMx Whole Transcriptome Atlas spatial transcriptomics
+- Bayesian cell-type deconvolution
+- regression-derived cell-type signatures
+- ROI-level statistical modeling
+- marker-based biological validation
+- pathway enrichment linked to spatial cell-type abundance
+
+In the current application, this enables compartment-resolved analysis of
+vascular, glial, and neuronal remodeling across parenchymal and vascular
+amyloid microenvironments.
+
+Although developed for AD/CAA, the framework is readily adaptable to any
+study combining annotated sc/snRNA-seq references with GeoMx WTA or
+related spatial transcriptomic platforms.
 
 ### Notes
 
-- This repository is intended as a modular research framework, not a single-click pipeline.
-- Sensitive raw data and patient metadata should not be committed.
-- Large model outputs should be stored outside Git or tracked with Git LFS.
-- The modified Pyro model is intended for research use and should be validated for each dataset.
+- The repository is organized as a modular computational framework rather than a single-click pipeline.
+- Each analysis stage can be executed independently using the corresponding scripts.
+- Validation modules are designed to distinguish technical artifacts from biologically meaningful subtype overlap.
+- Sensitive raw data and patient metadata should never be committed.
+- Large trained model objects are best managed outside Git or through Git LFS.
+- The modified Bayesian SpaceJam implementation is intended for research use and should be validated for new datasets.
 
+### Current Status
 
+| Module                 | Status  |
+|------------------------|---------|
+| Reference Construction |    ✅   |
+| Bayesian deconvolution |    ✅   |
+| Statistical modeling   |    ✅   |
+| Marker validation      |    ✅   |
+| Signature validation   |    ✅   |
+| Compositional analysis |    ✅   |
+| Pathway analysis       |    ✅   |
+| Pseudobulk validation  |    ✅   |
+| Method comparison      |    🟡   |
+| Figure generation      |    🟡   |
 
-### Author
+### Workflow
+```text
+                   ST / snRNA-seq
+                        │
+                        ▼
+              Reference preprocessing
+                        │
+                        ▼
+         Regression signature learning
+                        │
+                        ▼
+        Bayesian spatial deconvolution
+                        │
+                        ▼
+      ROI cell-type abundance estimates
+                        │
+        ┌───────────────┼────────────────┐
+        │               │                │
+        ▼               ▼                ▼
+ Marker validation  Statistical     Pathway analysis
+                    modeling
+        │               │                │
+        └───────────────┼────────────────┘
+                        ▼
+             Biological interpretation
+```
+
+## Highlights
+
+- Bayesian spatial deconvolution using a modified SpaceJam framework
+- Regression-derived cell-type signatures from annotated snRNA-seq references
+- Mixed-effects statistical modeling for disease and pathology contrasts
+- Independent biological validation using marker-gene concordance
+- Regression signature identity assessment
+- Pseudobulk benchmarking for deconvolution accuracy
+- CLR-based compositional and cell-type co-occurrence analyses
+- Pathway enrichment linked directly to inferred spatial abundance
+
+### Authors:
 Enrique Chimal
-PhD Candidate – Medical Neuroscience
+PhD Candidate – Medical Neuroscience - Indiana University School of Medicine
 
 This README positions the repo as a full **computational biology framework**, not just a collection of scripts.
