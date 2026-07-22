@@ -1,0 +1,14 @@
+method,ROI_ID,all_na,n_finite,proportion_sum
+SpatialDecon,2497_D_001,TRUE,0,NA
+SpatialDecon,2497_D_002,TRUE,0,NA
+SpatialDecon,2497_D_003,TRUE,0,NA
+SpatialDecon,2497_D_004,TRUE,0,NA
+SpatialDecon,2497_D_005,TRUE,0,NA
+SpatialDecon,2497_E_002,TRUE,0,NA
+SpatialDecon,2497_E_003,TRUE,0,NA
+SpatialDecon,2497_F_001,TRUE,0,NA
+SpatialDecon,2497_F_002,TRUE,0,NA
+SpatialDecon,2534_C_006,TRUE,0,NA
+SpatialDecon,2613_B_002,TRUE,0,NA
+SpatialDecon,2613_C_003,TRUE,0,NA
+SpatialDecon,2845_B_004,TRUE,0,NA
