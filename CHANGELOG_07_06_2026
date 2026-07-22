@@ -265,3 +265,26 @@ This adds a ggplot2 figure layer covering all of them.
 - **`python/pseudobulk_validation_utils.py`**: added `plot_recovery_bar()` (sorted per-cell-type recovery metric), completing the pseudobulk plots on the Python side where the rest of that analysis lives.
 - **`scripts/run_all_figures.R`** (new): reads all R-side result CSVs and writes figures under `results/figures/<analysis>/`; each figure is guarded so a missing input skips it with a message rather than aborting.
 🟡 Ready for finalized outputs
+
+
+# Comparing changes to model to remove inert bias caused by inflating fibroblast abundance
+
+## Planned Changes (7-22-2026)
+- Removal of fibroblast, scaling proportions so that they sum to 1 and computing new contrast: **Status:** As expected many of the cell types lost significance and AD-CAA bias was lost. 
+As a side-note: amyloid contrast aslo shifted.
+- Modeling absolute abundance with a total-count offset (limma/DESeq2-style) instead of relative proportion, with an explicit calibration gate. **Status**: implementation ongoing, scripts not verified.
+
+### IMPLEMENTATION PIPELINE 
+1. Extend `python/abundance_extraction_utils.py` with 
+- `compute_roi_total_counts(adata)` (per-ROI `total_counts`, `n_genes_detected`, `size_factor_mor`) 
+- `compute_median_of_ratios_size_factors(X, method="poscounts")` (DESeq2 poscounts variant: per-gene reference computed from log-means over ROIs where that gene is nonzero, not requiring nonzero-everywhere; per-ROI size factor = exp(median over genes-with-nonzero-count-in-that-ROI of (log(count) - gene reference)), plus the count of genes used so a too-small count can be flagged). 
+2. `notebooks/04b_extract_roi_total_counts.py` calls these against `data/CAA-AD_AnnData.h5ad` and writes `results/cell_proportions/roi_total_counts.csv`.
+3. `R/absolute_calibration_utils.R`: `compute_calibration_ratio_table()` (sum `abs_abundance` per ROI, join `roi_total_counts.csv`, error loudly on ID mismatch) and `run_calibration_gate_check(calib_df, biological_threshold_log2 = 0.5)` fitting `glmmTMB(log_calibration_ratio ~ disease_status + pathology + region + (1|Scan_ID), family = gaussian())`, deciding `proceed` / `proceed_with_correction` / `do_not_proceed` for the three cross-condition contrasts (Amyloid effect is exempt by construction — single posterior). 
+4. `scripts/run_calibration_gate_check.R` writes `calibration_gate_decision.txt`/csv that downstream scripts check for.
+5. `R/absolute_abundance_utils.R` mirroring `R/contrast_utils.R`'s actual structure: `prepare_absolute_abundance_data(offset_col = "size_factor_mor")`, `.run_absolute_model()` fitting `glmmTMB(log_abs_abundance ~ <group formula> + offset(log_offset) + (1|Scan_ID), family = gaussian())`, and the four `run_*_effect_absolute()` mirrors of `run_amyloid_effect()` / `run_disease_effect()` / `run_weighted_overall_effect()` / `run_max_pathology_effect()` (reusing `.add_group_factor()` from `contrast_utils.R`), plus `format_absolute_contrast_summary()` emitting both `log2_fold_change` and `log2_OR`. Before trusting any output: refit with a shifted `log_offset` and confirm `emmeans::contrast()` estimates are unchanged (only marginal means should move) .
+6. `scripts/run_absolute_abundance_contrasts.R` (mirrors `run_spatial_stats_no_fibroblast.R`'s shape) checks for the gate decision file first, runs `size_factor_mor` → `results/spatial_stats_absolute/`, then `total_counts` → `results/spatial_stats_absolute_rawlibsize/`.
+
+### Visualizations
+1. `R/viz_absolute_abundance.R`: `plot_calibration_gate_diagnostic()` and `plot_absolute_vs_relative_fc_scatter()` (joins against `spatial_stats/combined_spatial_contrast_summary.csv`), `plot_contrast_effsize_heatmap()` ,`plot_contrast_forest()`. 
+2. `scripts/run_absolute_abundance_figures.R`. Similar to figures generated for beta-mixed model OR from relative proportions
+3. Extension of `scripts/run_model_comparison_figures.R`.
