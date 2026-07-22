@@ -430,7 +430,16 @@ related spatial transcriptomic platforms.
 | Compositional analysis |    ✅   |
 | Pathway analysis       |    ✅   |
 | Pseudobulk validation  |    ✅   |
-| Method comparison      |    🟡   |
+| Method comparison      |    Current validation status
+
+✅ SpatialDecon successfully implemented and benchmarked
+✅ DWLS successfully implemented and benchmarked
+🟡 MuSiC pending
+🟡 Bisque pending
+🟡 BayesPrism pending
+🟡 SPOTlight pending
+🟡 RCTD pending
+🟡 STdeconvolve pending   |
 | Figure generation      |    🟡   |
 
 ### Workflow
