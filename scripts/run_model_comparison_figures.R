@@ -38,7 +38,8 @@ if_exists <- function(path, expr) {
 
 model_dirs <- list(
   "Beta (raw proportions)" = "results/spatial_stats",
-  "Beta (Fibroblast excluded)" = "results/spatial_stats_no_fibroblast"
+  "Beta (Fibroblast excluded)" = "results/spatial_stats_no_fibroblast",
+  "Absolute (offset-adjusted)" = "results/spatial_stats_absolute"
 )
 
 combined_csvs <- lapply(model_dirs, function(d) file.path(d, "combined_spatial_contrast_summary.csv"))
@@ -96,6 +97,18 @@ if_exists(
   plot_effect_size_comparison_scatter(
     combined_csvs[["Beta (raw proportions)"]], combined_csvs[["Beta (Fibroblast excluded)"]],
     "Beta (raw proportions)", "Beta (Fibroblast excluded)",
+    file.path(fig_root, "model_comparison")
+  )
+)
+
+# Beta (raw proportions) vs. Absolute (offset-adjusted): does modeling
+# absolute abundance with a total-count offset move effect sizes/hit rates
+# the same way as excluding Fibroblast did, or differently?
+if_exists(
+  c(combined_csvs[["Beta (raw proportions)"]], combined_csvs[["Absolute (offset-adjusted)"]]),
+  plot_effect_size_comparison_scatter(
+    combined_csvs[["Beta (raw proportions)"]], combined_csvs[["Absolute (offset-adjusted)"]],
+    "Beta (raw proportions)", "Absolute (offset-adjusted)",
     file.path(fig_root, "model_comparison")
   )
 )
