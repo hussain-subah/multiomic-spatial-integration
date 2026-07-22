@@ -420,18 +420,35 @@ related spatial transcriptomic platforms.
 
 ### Current Status
 
-| Module                 | Status  |
-|------------------------|---------|
-| Reference Construction |    ✅   |
-| Bayesian deconvolution |    ✅   |
-| Statistical modeling   |    ✅   |
-| Marker validation      |    ✅   |
-| Signature validation   |    ✅   |
-| Compositional analysis |    ✅   |
-| Pathway analysis       |    ✅   |
-| Pseudobulk validation  |    ✅   |
-| Method comparison      |    🟡   |
-| Figure generation      |    🟡   |
+### Current Status
+
+| Module | Status |
+|--------|--------|
+| Reference Construction | ✅ Complete |
+| Bayesian deconvolution | ✅ Complete |
+| Statistical modeling | ✅ Complete |
+| Marker validation | ✅ Complete |
+| Signature validation | ✅ Complete |
+| Compositional analysis | ✅ Complete |
+| Pathway analysis | ✅ Complete |
+| Pseudobulk validation | ✅ Complete |
+| Method comparison | 🟡 In progress |
+| Figure generation | 🟡 In progress |
+
+**Deconvolution methods**
+
+| Method | Status |
+|--------|--------|
+| Cell2location (baseline) | ✅ Validated |
+| SpatialDecon | ✅ Implemented & benchmarked |
+| DWLS | ✅ Implemented & benchmarked |
+| MuSiC | 🟡 Pending |
+| Bisque | 🟡 Pending |
+| BayesPrism | 🟡 Pending |
+| SPOTlight | 🟡 Pending |
+| RCTD | 🟡 Pending |
+| STdeconvolve | 🟡 Pending |
+| CIBERSORTx | 🟡 Input preparation implemented |
 
 ### Workflow
 ```text

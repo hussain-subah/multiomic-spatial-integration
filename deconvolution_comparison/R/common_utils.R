@@ -15,8 +15,8 @@ NULL
 #' `scripts/run_sn_reference_export.R` into the pieces every R adapter
 #' needs, without depending on Seurat.
 #'
-#' @param counts_mtx MatrixMarket counts file (genes x cells after transpose;
-#'   see `transpose`).
+#' @param counts_mtx MatrixMarket counts file. The current reference export is
+#'   stored as genes x cells.
 #' @param metadata_csv Cell metadata CSV (one row per cell).
 #' @param genes_csv Gene annotation CSV.
 #' @param celltype_col Metadata column with cell-type labels.
@@ -24,8 +24,8 @@ NULL
 #'   (used by MuSiC/Bisque for cross-sample variance). If not present, a single
 #'   dummy sample is assigned.
 #' @param gene_col Column in genes_csv holding gene ids.
-#' @param transpose Whether to transpose the matrix after reading (the export
-#'   writes cells x genes, so the default TRUE yields genes x cells).
+#' @param transpose Whether to transpose the matrix after reading. Use FALSE
+#'   for the current genes x cells reference export.
 #'
 #' @return list(counts = genes x cells sparse Matrix, cell_type = factor,
 #'   sample = factor, genes = character).
@@ -36,14 +36,34 @@ load_reference_mtx <- function(counts_mtx,
                                celltype_col = "New_Idents",
                                sample_col = "orig.ident",
                                gene_col = "gene_id",
-                               transpose = TRUE) {
+                               transpose = FALSE) {
   counts <- Matrix::readMM(counts_mtx)
   if (transpose) counts <- Matrix::t(counts)
   counts <- methods::as(counts, "CsparseMatrix")
 
   meta <- utils::read.csv(metadata_csv, row.names = 1, stringsAsFactors = FALSE)
   genes <- utils::read.csv(genes_csv, stringsAsFactors = FALSE)
+  if (nrow(counts) != nrow(genes)) {
+    stop(
+      "load_reference_mtx: count-matrix rows (",
+      nrow(counts),
+      ") do not match gene-table rows (",
+      nrow(genes),
+      "). Check matrix orientation and the transpose argument.",
+      call. = FALSE
+    )
+  }
 
+  if (ncol(counts) != nrow(meta)) {
+    stop(
+      "load_reference_mtx: count-matrix columns (",
+      ncol(counts),
+      ") do not match metadata rows (",
+      nrow(meta),
+      "). Check matrix orientation and cell ordering.",
+      call. = FALSE
+    )
+  }
   gene_ids <- as.character(genes[[gene_col]])
   rownames(counts) <- gene_ids
   colnames(counts) <- rownames(meta)
@@ -61,9 +81,19 @@ load_reference_mtx <- function(counts_mtx,
   sample <- if (sample_col %in% colnames(meta)) {
     factor(meta[[sample_col]])
   } else {
-    message("load_reference_mtx: sample_col '", sample_col,
-            "' not found; assigning a single dummy sample.")
-    factor(rep("sample1", ncol(counts)))
+    derived_sample <- sub(
+      "_.*$",
+      "",
+      rownames(meta)
+    )
+  
+    message(
+      "load_reference_mtx: sample_col '",
+      sample_col,
+      "' not found; deriving sample IDs from cell-name prefixes."
+    )
+
+    factor(derived_sample)
   }
 
   list(counts = counts, cell_type = cell_type, sample = sample, genes = gene_ids)
@@ -179,10 +209,41 @@ standardize_proportions <- function(prop_mat, method, normalize = TRUE) {
   prop_mat <- as.matrix(prop_mat)
 
   if (normalize) {
-    row_sums <- rowSums(prop_mat)
-    row_sums[row_sums == 0] <- 1
-    prop_mat <- prop_mat / row_sums
+  row_sums <- rowSums(prop_mat)
+
+  zero_rows <- which(
+    !is.finite(row_sums) | row_sums <= 0
+  )
+
+  if (length(zero_rows) > 0) {
+    warning(
+      "standardize_proportions: ",
+      length(zero_rows),
+      " ROI(s) have zero or non-finite total abundance and ",
+      "will be returned as NA proportions: ",
+      paste(
+        head(rownames(prop_mat)[zero_rows], 5),
+        collapse = ", "
+      ),
+      if (length(zero_rows) > 5) " ..." else "",
+      call. = FALSE
+    )
   }
+
+  valid_rows <- setdiff(
+    seq_len(nrow(prop_mat)),
+    zero_rows
+  )
+
+  prop_mat[valid_rows, ] <- (
+    prop_mat[valid_rows, , drop = FALSE] /
+    row_sums[valid_rows]
+  )
+
+  if (length(zero_rows) > 0) {
+    prop_mat[zero_rows, ] <- NA_real_
+  }
+}
 
   long <- data.frame(
     method = method,

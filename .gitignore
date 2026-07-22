@@ -55,3 +55,8 @@ data/
 # ======================================================
 .DS_Store
 /archive/
+
+# Deconvolution comparison intermediates and logs
+results/deconvolution_comparison/independent_reference_signature.csv
+results/deconvolution_comparison/*.log
+results/Script_results/
