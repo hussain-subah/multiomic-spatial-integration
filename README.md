@@ -431,13 +431,13 @@ related spatial transcriptomic platforms.
 | Pathway analysis       |    ✅   |
 | Pseudobulk validation  |    ✅   |
 | Method comparison      |    ✅ SpatialDecon successfully implemented and benchmarked |
-|                        |    ✅ DWLS successfully implemented and benchmarked         |
-|                        |    🟡 MuSiC pending                                         |
-|                        |    🟡 Bisque pending                                        |
-|                        |    🟡 BayesPrism pending                                    |
-|                        |    🟡 SPOTlight pending                                     |
-|                        |    🟡 RCTD pending                                          |
-|                        |    🟡 STdeconvolve pending                                  |
+|                            ✅ DWLS successfully implemented and benchmarked         |
+|                            🟡 MuSiC pending                                         |
+|                            🟡 Bisque pending                                        |
+|                            🟡 BayesPrism pending                                    |
+|                            🟡 SPOTlight pending                                     |
+|                            🟡 RCTD pending                                          |
+|                            🟡 STdeconvolve pending                                  |
 | Figure generation      |    🟡   |
 
 ### Workflow
