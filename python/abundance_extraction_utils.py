@@ -186,6 +186,132 @@ def make_long_abundance_table(
     return long_df
 
 
+def _build_roi_id_frame(obs, roi_id_col=None):
+    """
+    Build a single-column ROI_ID frame aligned to `obs`'s row order.
+
+    Mirrors the collision-avoidance rename in `make_abundance_dataframe()`
+    (AnnData obs index is the true ROI identifier; an existing `ROI_ID`
+    metadata column, if present, is renamed to `GeoMx_ROI_ID` first) so a
+    table keyed here joins cleanly against abundance tables built by
+    `make_abundance_dataframe()`.
+
+    Parameters
+    ----------
+    obs : pandas.DataFrame
+        ROI metadata (e.g. `adata.obs`).
+    roi_id_col : str, optional
+        Optional ROI ID column to preserve, as in `make_abundance_dataframe()`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        Single-column `ROI_ID` frame, one row per input row, same order.
+    """
+    if roi_id_col is None:
+        idx = obs.index.to_series().reset_index(drop=True)
+        return pd.DataFrame({"ROI_ID": idx.astype(str).values})
+
+    if roi_id_col in obs.columns:
+        return pd.DataFrame({"ROI_ID": obs[roi_id_col].astype(str).values})
+
+    raise ValueError(f"{roi_id_col} not found in obs.")
+
+
+def compute_median_of_ratios_size_factors(X, method="poscounts"):
+    """
+    DESeq2-style median-of-ratios size factors, computed directly in numpy.
+
+    Parameters
+    ----------
+    X : array-like or scipy.sparse matrix
+        ROI x gene count matrix (raw counts, not normalized).
+    method : str
+        Only `"poscounts"` is implemented: a gene needs to be nonzero in
+        at least one ROI (not nonzero in every ROI) to contribute, since a
+        WTA panel can have very few genes nonzero across every ROI. Each
+        gene's reference log-value is the mean log-count over the ROIs
+        where that gene is nonzero (rather than a geometric mean over all
+        ROIs); each ROI's size factor is the median, over genes nonzero in
+        that ROI, of (log(count) - gene reference).
+
+    Returns
+    -------
+    size_factors : numpy.ndarray
+        Per-ROI size factor, shape (n_rois,).
+    n_genes_used : int
+        Number of genes that were nonzero in at least one ROI and
+        contributed to the reference (a suspiciously small count means
+        `size_factors` may be unstable on this panel).
+    """
+    if method != "poscounts":
+        raise ValueError(f"Unsupported method: {method!r}. Only 'poscounts' is implemented.")
+
+    if hasattr(X, "toarray"):
+        X = X.toarray()
+    X = np.asarray(X, dtype=np.float64)
+
+    nonzero_mask = X > 0
+    genes_used = nonzero_mask.any(axis=0)
+    n_genes_used = int(genes_used.sum())
+
+    if n_genes_used == 0:
+        raise ValueError("No genes are nonzero in any ROI; cannot compute size factors.")
+
+    X_used = X[:, genes_used]
+    mask_used = nonzero_mask[:, genes_used]
+
+    log_X = np.full_like(X_used, np.nan)
+    log_X[mask_used] = np.log(X_used[mask_used])
+
+    # Reference: mean log-count per gene over ROIs where it's nonzero.
+    gene_reference = np.nanmean(log_X, axis=0)
+
+    log_ratios = log_X - gene_reference[np.newaxis, :]
+
+    size_factors = np.exp(np.nanmedian(log_ratios, axis=1))
+
+    return size_factors, n_genes_used
+
+
+def compute_roi_total_counts(adata, roi_id_col=None):
+    """
+    Per-ROI total counts, genes detected, and median-of-ratios size factor.
+
+    Parameters
+    ----------
+    adata : AnnData
+        Loaded GeoMx AnnData (raw counts in `adata.X`).
+    roi_id_col : str, optional
+        Optional ROI ID column to preserve, as in `make_abundance_dataframe()`.
+
+    Returns
+    -------
+    pandas.DataFrame
+        One row per ROI, columns: `ROI_ID`, `total_counts`, `n_genes_detected`,
+        `size_factor_mor`, `n_genes_used_for_size_factor`.
+    """
+    X = adata.X
+    X_dense = X.toarray() if hasattr(X, "toarray") else np.asarray(X)
+
+    total_counts = X_dense.sum(axis=1).ravel()
+    n_genes_detected = (X_dense > 0).sum(axis=1).ravel()
+
+    size_factors, n_genes_used = compute_median_of_ratios_size_factors(
+        X_dense, method="poscounts"
+    )
+
+    roi_ids = _build_roi_id_frame(adata.obs, roi_id_col=roi_id_col)
+
+    return pd.DataFrame({
+        "ROI_ID": roi_ids["ROI_ID"].values,
+        "total_counts": total_counts,
+        "n_genes_detected": n_genes_detected,
+        "size_factor_mor": size_factors,
+        "n_genes_used_for_size_factor": n_genes_used,
+    })
+
+
 def save_abundance_outputs(
     output_dir,
     ad_abs_df=None,
